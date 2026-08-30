@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zawer_backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+    networks:
+      - zawer_network
+
+  # Optional local MongoDB service for offline / isolated development
+  # Run with: docker compose --profile local-db up
+  mongo:
+    image: mongo:7-jammy
+    container_name: zawer_mongo
+    restart: unless-stopped
+    profiles:
+      - local-db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - zawer_network
+
+networks:
+  zawer_network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+    driver: local

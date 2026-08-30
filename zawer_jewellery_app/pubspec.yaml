@@ -1,0 +1,65 @@
+name: zawer_jewellery_app
+description: Luxury Jewellery Shopping App
+
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.8.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  provider: ^6.1.5
+
+  http: ^1.5.0
+
+  carousel_slider: ^5.1.1
+
+  shared_preferences: ^2.5.3
+
+  cached_network_image: ^3.4.1
+
+  flutter_rating_bar: ^4.0.1
+
+  badges: ^3.1.2
+
+  intl: ^0.20.2
+
+  shimmer: ^3.0.0
+
+  lottie: ^3.3.1
+
+  flutter_svg: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/fonts/
+
+  fonts:
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces.ttf
+
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope.ttf
+
+    - family: PinyonScript
+      fonts:
+        - asset: assets/fonts/PinyonScript.ttf
