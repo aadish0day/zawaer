@@ -16,6 +16,9 @@ const wishlistRoutes =
 const orderRoutes =
   require("./routes/orderRoutes");
 
+const offerRoutes =
+  require("./routes/offerRoutes");
+
 const app = express();
 
 app.use(cors());
@@ -53,6 +56,11 @@ app.use(
 app.use(
   "/api/orders",
   orderRoutes
+);
+
+app.use(
+  "/api/offers",
+  offerRoutes
 );
 
 module.exports = app;

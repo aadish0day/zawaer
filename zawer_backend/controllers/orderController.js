@@ -159,6 +159,24 @@ const placeOrder = async (req, res) => {
       totalAmount += numPrice * numQty;
     }
 
+    const subtotal = totalAmount;
+    let finalDiscount = 0;
+    let appliedCoupon = "";
+
+    if (req.body.couponCode) {
+      const Offer = require("../models/Offer");
+      const code = req.body.couponCode.trim().toUpperCase();
+      const offer = await Offer.findOne({ code, isActive: true });
+      if (offer && !offer.isExpired() && subtotal >= offer.minOrderAmount) {
+        finalDiscount = offer.calculateDiscount(subtotal);
+        appliedCoupon = code;
+        // Increment usage count
+        await Offer.updateOne({ _id: offer._id }, { $inc: { usedCount: 1 } });
+      }
+    }
+
+    const finalPayable = Math.max(0, subtotal - finalDiscount);
+
     const placedDate = new Date();
     const trackingNumber = "ZWR-" + Math.floor(100000 + Math.random() * 900000);
     const initialTimeline = generateInitialTimeline(placedDate);
@@ -170,7 +188,10 @@ const placeOrder = async (req, res) => {
       address,
       paymentMethod: paymentMethod || "Cash on Delivery",
       items,
-      totalAmount,
+      subtotal,
+      discountAmount: finalDiscount,
+      couponCode: appliedCoupon,
+      totalAmount: finalPayable,
       status: "Order Placed",
       trackingNumber,
       courierPartner: "Sequel Secure Luxury Logistics",

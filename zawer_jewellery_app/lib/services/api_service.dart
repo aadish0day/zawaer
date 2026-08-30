@@ -525,6 +525,8 @@ class ApiService {
     required String address,
     required String paymentMethod,
     required List<Map<String, dynamic>> items,
+    String? couponCode,
+    double? discountAmount,
   }) async {
     final String token = await getToken();
     final Uri url = Uri.parse("$baseUrl/api/orders");
@@ -542,6 +544,8 @@ class ApiService {
           "address": address,
           "paymentMethod": paymentMethod,
           "items": items,
+          if (couponCode != null && couponCode.isNotEmpty) "couponCode": couponCode,
+          if (discountAmount != null && discountAmount > 0) "discountAmount": discountAmount,
         }),
       ));
       return await _handleResponse(response);
@@ -737,6 +741,73 @@ class ApiService {
         "statusCode": 0,
         "success": false,
         "message": "Unable to update order status",
+        "error": error.toString(),
+      };
+    }
+  }
+
+  // =========================================================
+  // OFFERS & COUPONS MODULE (Module 12)
+  // =========================================================
+
+  // GET ALL ACTIVE OFFERS
+  static Future<Map<String, dynamic>> getOffers() async {
+    final Uri url = Uri.parse("$baseUrl/api/offers");
+
+    try {
+      final response = await _send(() => http.get(url));
+      return await _handleResponse(response);
+    } catch (error) {
+      return {
+        "statusCode": 0,
+        "success": false,
+        "message": "Unable to fetch promotional offers",
+        "error": error.toString(),
+      };
+    }
+  }
+
+  // GET DISCOUNTED PRODUCTS
+  static Future<Map<String, dynamic>> getDiscountedProducts() async {
+    final Uri url = Uri.parse("$baseUrl/api/offers/discounted-products");
+
+    try {
+      final response = await _send(() => http.get(url));
+      return await _handleResponse(response);
+    } catch (error) {
+      return {
+        "statusCode": 0,
+        "success": false,
+        "message": "Unable to fetch discounted products",
+        "error": error.toString(),
+      };
+    }
+  }
+
+  // VALIDATE COUPON CODE
+  static Future<Map<String, dynamic>> validateCoupon({
+    required String code,
+    required double subtotal,
+    String? category,
+  }) async {
+    final Uri url = Uri.parse("$baseUrl/api/offers/validate-coupon");
+
+    try {
+      final response = await _send(() => http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "couponCode": code.trim().toUpperCase(),
+          "subtotal": subtotal,
+          if (category != null && category.isNotEmpty) "category": category,
+        }),
+      ));
+      return await _handleResponse(response);
+    } catch (error) {
+      return {
+        "statusCode": 0,
+        "success": false,
+        "message": "Unable to validate coupon code",
         "error": error.toString(),
       };
     }
