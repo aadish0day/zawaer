@@ -67,6 +67,29 @@ const productSchema = new mongoose.Schema(
       required: true,
     },
 
+    originalPrice: {
+      type: Number,
+      default: function () {
+        return this.price;
+      },
+    },
+
+    discountPercentage: {
+      type: Number,
+      default: 0,
+    },
+
+    isSpecialOffer: {
+      type: Boolean,
+      default: false,
+    },
+
+    offerTag: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     rating: {
       type: Number,
       default: 0,
@@ -87,7 +110,4 @@ const productSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model(
-  "Product",
-  productSchema
-);
+module.exports = mongoose.model("Product", productSchema);
