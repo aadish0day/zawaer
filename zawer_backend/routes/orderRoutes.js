@@ -23,8 +23,11 @@ router.get("/", getMyOrders);
 // Get specific order by ID
 router.get("/:id", getOrderById);
 
-// Get live order tracking module data
+// Get live order tracking module data by ID
 router.get("/:id/tracking", getOrderTracking);
+
+// Get live order tracking by Tracking Number or ID query
+router.get("/track/:query", getOrderTracking);
 
 // Update / advance order tracking status
 router.put("/:id/status", updateOrderStatus);

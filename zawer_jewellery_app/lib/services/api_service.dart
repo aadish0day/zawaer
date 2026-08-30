@@ -637,7 +637,9 @@ class ApiService {
 
   static Future<Map<String, dynamic>> getOrderTracking(String orderId) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/orders/$orderId/tracking");
+    final Uri url = Uri.parse(
+      "$baseUrl/api/orders/${Uri.encodeComponent(orderId.trim())}/tracking",
+    );
 
     try {
       final response = await _send(() => http.get(
@@ -656,12 +658,40 @@ class ApiService {
   }
 
   // =========================================================
+  // TRACK ORDER BY TRACKING NUMBER OR ID
+  // =========================================================
+
+  static Future<Map<String, dynamic>> trackOrderByNumber(String query) async {
+    final String token = await getToken();
+    final Uri url = Uri.parse(
+      "$baseUrl/api/orders/track/${Uri.encodeComponent(query.trim())}",
+    );
+
+    try {
+      final response = await _send(() => http.get(
+        url,
+        headers: {"Authorization": "Bearer $token"},
+      ));
+      return await _handleResponse(response);
+    } catch (error) {
+      return {
+        "statusCode": 0,
+        "success": false,
+        "message": "Unable to track order",
+        "error": error.toString(),
+      };
+    }
+  }
+
+  // =========================================================
   // GET ORDER BY ID
   // =========================================================
 
   static Future<Map<String, dynamic>> getOrderById(String orderId) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/orders/$orderId");
+    final Uri url = Uri.parse(
+      "$baseUrl/api/orders/${Uri.encodeComponent(orderId.trim())}",
+    );
 
     try {
       final response = await _send(() => http.get(
@@ -688,7 +718,9 @@ class ApiService {
     required String status,
   }) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/orders/$orderId/status");
+    final Uri url = Uri.parse(
+      "$baseUrl/api/orders/${Uri.encodeComponent(orderId.trim())}/status",
+    );
 
     try {
       final response = await _send(() => http.put(

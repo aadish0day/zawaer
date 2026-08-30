@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../utils/colors.dart';
 import '../utils/theme_controller.dart';
 import 'orders_screen.dart';
+import 'order_tracking_screen.dart';
 import 'wishlist_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -574,12 +575,77 @@ class _ProfileScreenState extends State<ProfileScreen> {
             buildTile(
               Icons.shopping_bag,
               "My Orders",
-                  () {
+              () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) =>
-                    const OrdersScreen(),
+                    builder: (_) => const OrdersScreen(),
+                  ),
+                );
+              },
+            ),
+
+            // =====================================================
+            // TRACK AN ORDER
+            // =====================================================
+
+            buildTile(
+              Icons.location_searching_rounded,
+              "Track Order Live",
+              () {
+                final trackController = TextEditingController();
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    title: Text(
+                      "Track Your Jewellery",
+                      style: AppFonts.cinzel(fontWeight: FontWeight.bold),
+                    ),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "Enter your Order ID or Tracking Number (e.g. ZWR-XXXXXX) to view live vault status & transit updates.",
+                          style: AppFonts.poppins(fontSize: 12.5),
+                        ),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: trackController,
+                          decoration: InputDecoration(
+                            labelText: "Order ID / Tracking Number",
+                            prefixIcon: const Icon(Icons.qr_code_scanner),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text("Cancel"),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+                        onPressed: () {
+                          final query = trackController.text.trim();
+                          if (query.isNotEmpty) {
+                            Navigator.pop(ctx);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => OrderTrackingScreen(orderId: query),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text("Track Now", style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -592,12 +658,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             buildTile(
               Icons.favorite,
               "Wishlist",
-                  () {
+              () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) =>
-                    const WishlistScreen(),
+                    builder: (_) => const WishlistScreen(),
                   ),
                 );
               },

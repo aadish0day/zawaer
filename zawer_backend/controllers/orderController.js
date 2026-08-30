@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Order = require("../models/Order");
 
 const TRACKING_STAGES = [
@@ -15,25 +16,25 @@ const TRACKING_STAGES = [
   },
   {
     status: "Processing",
-    title: "Artisan Quality & Hallmarking",
+    title: "Processing & Hallmarking",
     description: "Master jewelers are conducting 24-point prong & gemstone setting inspection.",
     location: "ZAWER Diamond Studio & Vault",
   },
   {
     status: "Shipped",
-    title: "Dispatched via Armored Transit",
+    title: "Shipped & Dispatched",
     description: "Handed over to Sequel Secure Logistics in tamper-evident, GPS-tracked casing.",
     location: "High-Security Transit Hub",
   },
   {
     status: "Out for Delivery",
-    title: "Out for Luxury Delivery",
+    title: "Out for Delivery",
     description: "Our dedicated luxury delivery executive is on the way with hand-delivery protocol.",
     location: "Local Express Delivery Hub",
   },
   {
     status: "Delivered",
-    title: "Delivered to Customer",
+    title: "Delivered",
     description: "Package successfully handed over to customer with seal inspection verified.",
     location: "Customer Destination Address",
   },
@@ -74,7 +75,9 @@ function updateTimelineForStatus(timeline, currentStatus) {
 
   const now = new Date();
   return TRACKING_STAGES.map((stage, idx) => {
-    const existing = timeline.find((t) => t.status.toLowerCase() === stage.status.toLowerCase());
+    const existing = Array.isArray(timeline)
+      ? timeline.find((t) => t.status && t.status.toLowerCase() === stage.status.toLowerCase())
+      : null;
     const isCompleted = idx <= targetIndex;
     let ts = existing?.timestamp;
     if (isCompleted && !ts) {
@@ -90,6 +93,33 @@ function updateTimelineForStatus(timeline, currentStatus) {
     };
   });
 }
+
+const findOrderFlexible = async (query, userId = null) => {
+  if (!query) return null;
+  const trimmed = query.toString().trim();
+
+  // Try by ObjectId if valid
+  if (mongoose.Types.ObjectId.isValid(trimmed)) {
+    const criteria = { _id: trimmed };
+    if (userId) criteria.userId = userId;
+    const order = await Order.findOne(criteria);
+    if (order) return order;
+  }
+
+  // Try by exact tracking number (case-insensitive)
+  const criteriaTracking = {
+    trackingNumber: { $regex: new RegExp(`^${trimmed}$`, "i") },
+  };
+  if (userId) criteriaTracking.userId = userId;
+  const orderTracking = await Order.findOne(criteriaTracking);
+  if (orderTracking) return orderTracking;
+
+  // Fallback: If not found under user, but tracking number matches globally
+  const globalTracking = await Order.findOne({
+    trackingNumber: { $regex: new RegExp(`^${trimmed}$`, "i") },
+  });
+  return globalTracking;
+};
 
 const placeOrder = async (req, res) => {
   try {
@@ -112,13 +142,21 @@ const placeOrder = async (req, res) => {
     let totalAmount = 0;
 
     for (const item of items) {
-      if (!item.productId || !item.name || !item.price || !item.quantity) {
+      if (!item.productId || !item.name || item.price == null || item.quantity == null) {
         return res.status(400).json({
           success: false,
           message: "Each item needs productId, name, price and quantity",
         });
       }
-      totalAmount += Number(item.price) * Number(item.quantity);
+      const numPrice = Number(item.price);
+      const numQty = Number(item.quantity);
+      if (isNaN(numPrice) || isNaN(numQty) || numPrice < 0 || numQty < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid price or quantity specified for item",
+        });
+      }
+      totalAmount += numPrice * numQty;
     }
 
     const placedDate = new Date();
@@ -165,7 +203,6 @@ const getMyOrders = async (req, res) => {
       createdAt: -1,
     });
 
-    // Ensure backwards compatibility for legacy orders without timeline
     const orders = rawOrders.map((order) => {
       const orderObj = order.toObject();
       if (!orderObj.timeline || orderObj.timeline.length === 0) {
@@ -200,12 +237,9 @@ const getMyOrders = async (req, res) => {
 const getOrderById = async (req, res) => {
   try {
     const orderId = req.params.id;
-    const userId = req.user.id;
+    const userId = req.user ? req.user.id : null;
 
-    const order = await Order.findOne({
-      _id: orderId,
-      userId,
-    });
+    const order = await findOrderFlexible(orderId, userId);
 
     if (!order) {
       return res.status(404).json({
@@ -243,13 +277,10 @@ const getOrderById = async (req, res) => {
 
 const getOrderTracking = async (req, res) => {
   try {
-    const orderId = req.params.id;
-    const userId = req.user.id;
+    const query = req.params.id || req.params.query;
+    const userId = req.user ? req.user.id : null;
 
-    const order = await Order.findOne({
-      _id: orderId,
-      userId,
-    });
+    const order = await findOrderFlexible(query, userId);
 
     if (!order) {
       return res.status(404).json({
@@ -316,7 +347,7 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    const order = await Order.findById(orderId);
+    const order = await findOrderFlexible(orderId);
 
     if (!order) {
       return res.status(404).json({
@@ -329,16 +360,20 @@ const updateOrderStatus = async (req, res) => {
     order.timeline = updateTimelineForStatus(order.timeline || [], status);
     order.aiDeliveryInsight = AI_INSIGHTS[status] || order.aiDeliveryInsight;
 
-    if (status === "Order Confirmed") {
+    if (status === "Order Placed") {
+      order.currentLocation = "ZAWER Central Vault Hub, Mumbai";
+    } else if (status === "Order Confirmed") {
       order.currentLocation = "ZAWER Central Verification Center";
     } else if (status === "Processing") {
       order.currentLocation = "ZAWER Diamond Studio & Vault";
     } else if (status === "Shipped") {
       order.currentLocation = "In Transit - Sequel Armored Division";
     } else if (status === "Out for Delivery") {
-      order.currentLocation = "Local Delivery Hub, " + order.address.split(",").slice(-2).join(",").trim();
+      order.currentLocation = "Local Delivery Hub, " + (order.address ? order.address.split(",").slice(-2).join(",").trim() : "Sector Hub");
     } else if (status === "Delivered") {
-      order.currentLocation = order.address;
+      order.currentLocation = order.address || "Delivered to Customer";
+    } else if (status === "Cancelled") {
+      order.currentLocation = "Order Cancelled - Refund Initiated";
     }
 
     await order.save();
@@ -363,4 +398,5 @@ module.exports = {
   getOrderById,
   getOrderTracking,
   updateOrderStatus,
+  findOrderFlexible,
 };

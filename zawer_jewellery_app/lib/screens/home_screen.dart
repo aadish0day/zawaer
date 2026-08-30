@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/text_styles.dart';
 
-import '../data/product_data.dart';
 import '../models/product_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
@@ -34,10 +33,13 @@ loadProducts();
 }
 
 // =====================================================
-// LOAD PRODUCTS FROM BACKEND
+// LOAD PRODUCTS FROM BACKEND (MongoDB)
 // =====================================================
 
 Future<void> loadProducts() async {
+setState(() {
+isLoadingProducts = true;
+});
 
 final result = await ApiService.getProducts();
 
@@ -65,11 +67,7 @@ isLoadingProducts = false;
 }
 }
 
-List<Product> get allProducts {
-return apiProducts.isNotEmpty
-? apiProducts
-: products;
-}
+List<Product> get allProducts => apiProducts;
 
 final List<String> categories = [
 "All",
@@ -257,8 +255,47 @@ child: isLoadingProducts && apiProducts.isEmpty
 ? const Center(
 child: CircularProgressIndicator(),
 )
-: GridView.builder(
+: filteredProducts.isEmpty
+? RefreshIndicator(
+onRefresh: loadProducts,
+child: ListView(
+physics: const AlwaysScrollableScrollPhysics(),
+children: [
+const SizedBox(height: 60),
+Center(
+child: Column(
+mainAxisAlignment: MainAxisAlignment.center,
+children: [
+Icon(
+Icons.diamond_outlined,
+size: 54,
+color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+),
+const SizedBox(height: 12),
+Text(
+"No jewellery found in this collection",
+style: AppFonts.poppins(
+fontSize: 14,
+color: Theme.of(context).colorScheme.onSurfaceVariant,
+),
+),
+const SizedBox(height: 14),
+OutlinedButton.icon(
+onPressed: loadProducts,
+icon: const Icon(Icons.refresh, size: 16),
+label: const Text("Refresh Collection"),
+),
+],
+),
+),
+],
+),
+)
+: RefreshIndicator(
+onRefresh: loadProducts,
+child: GridView.builder(
 padding: const EdgeInsets.symmetric(horizontal: 15),
+physics: const AlwaysScrollableScrollPhysics(),
 itemCount: filteredProducts.length,
 
 gridDelegate:
@@ -318,35 +355,25 @@ Expanded(
 
 child: Hero(
 
-tag: product.id,
+tag: "product_${product.id}",
 
-child: ClipRRect(
+child: Container(
+
+decoration: BoxDecoration(
 
 borderRadius:
 const BorderRadius.vertical(
 top: Radius.circular(20),
 ),
 
-child: Image.asset(
+image: DecorationImage(
 
-product.images.first,
-
-width: double.infinity,
+image:
+AssetImage(product.images.first),
 
 fit: BoxFit.cover,
 
-errorBuilder:
-(context, error, stackTrace) {
-
-return const Center(
-child: Icon(
-Icons.image_not_supported,
-size: 50,
-color: Colors.grey,
 ),
-);
-
-},
 
 ),
 
@@ -356,7 +383,7 @@ color: Colors.grey,
 
 ),
 Padding(
-padding: const EdgeInsets.all(10),
+padding: const EdgeInsets.all(12),
 child: Column(
 crossAxisAlignment:
 CrossAxisAlignment.start,
@@ -364,36 +391,27 @@ children: [
 
 Text(
 product.name,
-maxLines: 2,
-overflow: TextOverflow.ellipsis,
-style: AppFonts.cinzel(
+style: AppFonts.poppins(
 fontWeight: FontWeight.bold,
 fontSize: 16,
 ),
+maxLines: 1,
+overflow:
+TextOverflow.ellipsis,
 ),
 
-const SizedBox(height: 5),
-
-Text(
-product.category,
-style: AppFonts.poppins(
-color: Theme.of(context).colorScheme.onSurfaceVariant,
-fontSize: 13,
-),
-),
-
-const SizedBox(height: 8),
+const SizedBox(height: 4),
 
 Row(
 children: [
 
-Icon(
+const Icon(
 Icons.star,
-color: Colors.amber.shade700,
-size: 18,
+color: Colors.amber,
+size: 16,
 ),
 
-const SizedBox(width: 5),
+const SizedBox(width: 4),
 
 Text(
 product.rating.toString(),
@@ -470,6 +488,7 @@ fontWeight: FontWeight.bold,
 
 ),
 
+),
 ),
 ],
 ),
