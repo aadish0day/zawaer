@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../utils/text_styles.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/text_styles.dart';
 import 'order_tracking_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -17,6 +17,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
   List<Map<String, dynamic>> orders = [];
   final TextEditingController searchController = TextEditingController();
   String searchQuery = "";
+  String selectedFilter = "All";
+
+  final List<String> filterTabs = ["All", "In Transit", "Delivered"];
 
   @override
   void initState() {
@@ -31,9 +34,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   // =====================================================
-  // LOAD ORDERS FROM BACKEND
+  // LOAD ORDERS FROM BACKEND (MongoDB)
   // =====================================================
-
   Future<void> loadOrders() async {
     setState(() {
       isLoading = true;
@@ -41,13 +43,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
     final result = await ApiService.getOrders();
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     if (result["success"] == true) {
       final List orderList = (result["orders"] ?? []) as List;
-
       setState(() {
         orders = orderList.cast<Map<String, dynamic>>().toList();
         isLoading = false;
@@ -61,6 +60,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   void openTracking(String identifier) {
     if (identifier.trim().isEmpty) return;
+    HapticFeedback.mediumImpact();
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -72,27 +72,44 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Color getStatusColor(String status) {
     final lower = status.toLowerCase();
     if (lower.contains("delivered")) {
-      return Colors.green;
+      return const Color(0xFF2E7D32);
     } else if (lower.contains("out for delivery")) {
-      return Colors.orange.shade800;
+      return const Color(0xFFE65100);
     } else if (lower.contains("shipped")) {
-      return Colors.indigo.shade600;
+      return const Color(0xFF1565C0);
     } else if (lower.contains("processing")) {
-      return Colors.deepPurple;
+      return const Color(0xFF6A1B9A);
     } else if (lower.contains("confirmed")) {
-      return Colors.teal.shade700;
+      return const Color(0xFF00695C);
     } else if (lower.contains("placed")) {
       return const Color(0xFFD4AF37);
     } else if (lower.contains("cancel")) {
-      return Colors.red;
+      return const Color(0xFFC62828);
     }
-    return AppColors.primary;
+    return AppColors.gold;
   }
 
   List<Map<String, dynamic>> get filteredOrders {
-    if (searchQuery.trim().isEmpty) return orders;
+    List<Map<String, dynamic>> list = orders;
+
+    // Filter by tab
+    if (selectedFilter == "In Transit") {
+      list = list.where((o) {
+        final st = (o["status"] ?? "").toString().toLowerCase();
+        return !st.contains("delivered") && !st.contains("cancel");
+      }).toList();
+    } else if (selectedFilter == "Delivered") {
+      list = list.where((o) {
+        final st = (o["status"] ?? "").toString().toLowerCase();
+        return st.contains("delivered");
+      }).toList();
+    }
+
+    // Filter by search query
+    if (searchQuery.trim().isEmpty) return list;
     final q = searchQuery.toLowerCase().trim();
-    return orders.where((order) {
+
+    return list.where((order) {
       final id = order["_id"]?.toString().toLowerCase() ?? "";
       final trackingNum = order["trackingNumber"]?.toString().toLowerCase() ?? "";
       final status = order["status"]?.toString().toLowerCase() ?? "";
@@ -101,125 +118,347 @@ class _OrdersScreenState extends State<OrdersScreen> {
     }).toList();
   }
 
-  // =====================================================
-  // BUILD
-  // =====================================================
+  int get inTransitCount {
+    return orders.where((o) {
+      final st = (o["status"] ?? "").toString().toLowerCase();
+      return !st.contains("delivered") && !st.contains("cancel");
+    }).length;
+  }
+
+  int get deliveredCount {
+    return orders.where((o) {
+      final st = (o["status"] ?? "").toString().toLowerCase();
+      return st.contains("delivered");
+    }).length;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: theme.colorScheme.surface,
-        elevation: 0,
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          "My Orders",
-          style: AppFonts.cinzel(
-            color: theme.colorScheme.onSurface,
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: "Refresh",
-            onPressed: loadOrders,
-          ),
-        ],
-      ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                buildTrackingSearchBar(),
-                Expanded(
-                  child: orders.isEmpty
-                      ? buildEmptyView()
-                      : filteredOrders.isEmpty
-                          ? buildNoSearchResultsView()
-                          : buildOrdersView(),
-                ),
-              ],
+      backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
+      appBar: buildMaisonAppBar(isDark),
+      body: RefreshIndicator(
+        onRefresh: loadOrders,
+        color: AppColors.gold,
+        backgroundColor: isDark ? const Color(0xFF18181E) : Colors.white,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 8),
+                  buildTrackingSearchBar(isDark),
+                  const SizedBox(height: 14),
+                  buildTelemetryPills(isDark),
+                  const SizedBox(height: 14),
+                  buildFilterTabs(isDark),
+                  const SizedBox(height: 12),
+                ],
+              ),
             ),
+            isLoading
+                ? SliverFillRemaining(
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const SizedBox(
+                            width: 36,
+                            height: 36,
+                            child: CircularProgressIndicator(
+                              color: AppColors.gold,
+                              strokeWidth: 2.2,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            "Syncing Maison Vault Invoices...",
+                            style: AppFonts.cinzel(fontSize: 13, color: AppColors.gold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : orders.isEmpty
+                    ? SliverFillRemaining(
+                        child: buildEmptyView(isDark),
+                      )
+                    : filteredOrders.isEmpty
+                        ? SliverFillRemaining(
+                            child: buildNoSearchResultsView(isDark),
+                          )
+                        : SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            sliver: SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  return buildLuxuryOrderCard(filteredOrders[index], isDark);
+                                },
+                                childCount: filteredOrders.length,
+                              ),
+                            ),
+                          ),
+            const SliverToBoxAdapter(
+              child: SizedBox(height: 36),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget buildTrackingSearchBar() {
-    final theme = Theme.of(context);
+  // =========================================================================
+  // 1. MAISON APP BAR
+  // =========================================================================
+  PreferredSizeWidget buildMaisonAppBar(bool isDark) {
+    return AppBar(
+      backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
+      elevation: 0,
+      centerTitle: true,
+      leading: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.pop(context),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+              color: isDark ? const Color(0xFF18181D) : Colors.white,
+            ),
+            child: const Icon(Icons.arrow_back_ios_new, size: 16),
+          ),
+        ),
+      ),
+      title: Column(
+        children: [
+          Text(
+            "ZAWER MAISON",
+            style: AppFonts.cinzel(
+              fontSize: 10,
+              letterSpacing: 3.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.gold,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            "Acquisitions & Escort",
+            style: AppFonts.cinzel(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh, size: 20),
+          tooltip: "Refresh Invoices",
+          onPressed: loadOrders,
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      color: theme.colorScheme.surface,
+  // =========================================================================
+  // 2. FLOATING ARCHITECTURAL TRACKING SEARCH BAR
+  // =========================================================================
+  Widget buildTrackingSearchBar(bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF15151A) : Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: AppColors.gold.withValues(alpha: isDark ? 0.25 : 0.2),
+            width: 0.9,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: searchController,
+                onChanged: (val) {
+                  setState(() {
+                    searchQuery = val;
+                  });
+                },
+                onSubmitted: (val) {
+                  if (val.trim().isNotEmpty) {
+                    openTracking(val.trim());
+                  }
+                },
+                style: AppFonts.poppins(fontSize: 13.5),
+                decoration: InputDecoration(
+                  hintText: "Track by ZWR-XXXXXX or Order ID...",
+                  hintStyle: AppFonts.poppins(
+                    fontSize: 12.5,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+                  prefixIcon: const Icon(Icons.qr_code_scanner, size: 20, color: AppColors.gold),
+                  suffixIcon: searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: () {
+                            searchController.clear();
+                            setState(() {
+                              searchQuery = "";
+                            });
+                          },
+                        )
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(68, 38),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () {
+                  if (searchController.text.trim().isNotEmpty) {
+                    openTracking(searchController.text.trim());
+                  }
+                },
+                child: Text(
+                  "TRACK",
+                  style: AppFonts.cinzel(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // 3. TELEMETRY PILLS BAR
+  // =========================================================================
+  Widget buildTelemetryPills(bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           Expanded(
-            child: TextField(
-              controller: searchController,
-              onChanged: (val) {
-                setState(() {
-                  searchQuery = val;
-                });
-              },
-              onSubmitted: (val) {
-                if (val.trim().isNotEmpty) {
-                  openTracking(val.trim());
-                }
-              },
-              decoration: InputDecoration(
-                hintText: "Track by Order ID or ZWR-XXXXXX...",
-                hintStyle: AppFonts.poppins(
-                  fontSize: 13,
-                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF141418) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
                 ),
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.close, size: 18),
-                        onPressed: () {
-                          searchController.clear();
-                          setState(() {
-                            searchQuery = "";
-                          });
-                        },
-                      )
-                    : null,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.gold.withValues(alpha: 0.12),
+                    ),
+                    child: const Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.gold),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "$inTransitCount IN TRANSIT",
+                        style: AppFonts.poppins(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.9,
+                        ),
+                      ),
+                      Text(
+                        "Armored Escort",
+                        style: AppFonts.poppins(
+                          fontSize: 9,
+                          color: isDark ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
           const SizedBox(width: 10),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.brand(context),
-              foregroundColor: Colors.white,
-              minimumSize: const Size(78, 44),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF141418) : Colors.white,
                 borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+                ),
               ),
-            ),
-            onPressed: () {
-              if (searchController.text.trim().isNotEmpty) {
-                openTracking(searchController.text.trim());
-              }
-            },
-            child: const Text(
-              "TRACK",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF2E7D32).withValues(alpha: 0.12),
+                    ),
+                    child: const Icon(Icons.verified_outlined, size: 14, color: Color(0xFF2E7D32)),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "$deliveredCount DELIVERED",
+                        style: AppFonts.poppins(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.9,
+                        ),
+                      ),
+                      Text(
+                        "Vault Acquired",
+                        style: AppFonts.poppins(
+                          fontSize: 9,
+                          color: isDark ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -227,86 +466,72 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
-  Widget buildEmptyView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.shopping_bag_outlined,
-              size: 70,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(height: 15),
-            Text(
-              "No orders placed yet",
-              style: AppFonts.cinzel(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
+  // =========================================================================
+  // 4. FILTER TABS
+  // =========================================================================
+  Widget buildFilterTabs(bool isDark) {
+    return SizedBox(
+      height: 38,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: filterTabs.length,
+        itemBuilder: (context, index) {
+          final tab = filterTabs[index];
+          final isSelected = selectedFilter == tab;
+
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() {
+                  selectedFilter = tab;
+                });
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppColors.gold
+                      : (isDark ? const Color(0xFF16161C) : Colors.white),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isSelected ? AppColors.gold : (isDark ? Colors.white12 : Colors.black12),
+                    width: isSelected ? 1.2 : 0.8,
+                  ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: AppColors.gold.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Text(
+                  tab,
+                  style: AppFonts.poppins(
+                    fontSize: 11.5,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                    color: isSelected ? Colors.black : (isDark ? Colors.white : AppColors.black),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              "Your placed jewellery orders and live tracking will appear here.",
-              textAlign: TextAlign.center,
-              style: AppFonts.poppins(color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget buildNoSearchResultsView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.search_off, size: 60, color: Colors.grey),
-            const SizedBox(height: 12),
-            Text(
-              "No matching orders",
-              style: AppFonts.cinzel(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              "Try searching with full Tracking Number (e.g. ZWR-123456) or Order ID.",
-              textAlign: TextAlign.center,
-              style: AppFonts.poppins(color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () {
-                openTracking(searchQuery);
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-              child: Text("Track '$searchQuery' Directly"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget buildOrdersView() {
-    return RefreshIndicator(
-      onRefresh: loadOrders,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        itemCount: filteredOrders.length,
-        itemBuilder: (context, index) {
-          return buildOrderCard(filteredOrders[index]);
+          );
         },
       ),
     );
   }
 
-  Widget buildOrderCard(Map<String, dynamic> order) {
-    final theme = Theme.of(context);
+  // =========================================================================
+  // 5. LUXURY ORDER CARD (Double-Bezel Concentric Architecture)
+  // =========================================================================
+  Widget buildLuxuryOrderCard(Map<String, dynamic> order, bool isDark) {
     final List items = (order["items"] ?? []) as List;
     final String status = order["status"]?.toString() ?? "Order Placed";
     final String trackingNum = order["trackingNumber"]?.toString() ??
@@ -315,198 +540,330 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final Color statusColor = getStatusColor(status);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 18),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(1.2),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          colors: [
+            AppColors.gold.withValues(alpha: 0.35),
+            AppColors.gold.withValues(alpha: 0.06),
+            Colors.transparent,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: .06),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
-        border: Border.all(
-          color: AppColors.gold.withValues(alpha: 0.18),
-          width: 1,
-        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    trackingNum,
-                    style: AppFonts.poppins(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      color: AppColors.brand(context),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: trackingNum));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Tracking number copied"),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-                    },
-                    child: Icon(
-                      Icons.copy_rounded,
-                      size: 14,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.4)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF141418) : Colors.white,
+          borderRadius: BorderRadius.circular(21),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Top Row: Tracking ID & Luxury Status Chip
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
                   children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: statusColor,
+                    Text(
+                      trackingNum,
+                      style: AppFonts.cinzel(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14.5,
+                        letterSpacing: 1.1,
+                        color: AppColors.brand(context),
                       ),
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      status,
-                      style: AppFonts.poppins(
-                        color: statusColor,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.bold,
+                    const SizedBox(width: 6),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        Clipboard.setData(ClipboardData(text: trackingNum));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            behavior: SnackBarBehavior.floating,
+                            content: Text("Tracking number copied to clipboard"),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                        ),
+                        child: const Icon(Icons.copy_rounded, size: 12, color: Colors.grey),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            "Placed on ${_formatDate(order["createdAt"]?.toString() ?? "")}",
-            style: AppFonts.poppins(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontSize: 12,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.5), width: 0.8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: statusColor,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        status.toUpperCase(),
+                        style: AppFonts.poppins(
+                          color: statusColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ),
-          const Divider(height: 22),
-          ...items.map((item) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: item["image"].toString().isEmpty
-                          ? Container(
-                              width: 48,
-                              height: 48,
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.diamond_outlined, size: 20),
-                            )
-                          : Image.asset(
-                              item["image"],
-                              width: 48,
-                              height: 48,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) => Container(
-                                width: 48,
-                                height: 48,
-                                color: theme.colorScheme.surfaceContainerHighest,
-                                child: const Icon(Icons.diamond_outlined, size: 20),
+            const SizedBox(height: 6),
+            Text(
+              "Acquisition date: ${_formatDate(order["createdAt"]?.toString() ?? "")} • BIS 916 Insured",
+              style: AppFonts.poppins(
+                color: isDark ? Colors.white54 : Colors.black54,
+                fontSize: 11,
+              ),
+            ),
+            const Divider(height: 20),
+            // Items Gallery
+            ...items.map((item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: 52,
+                          height: 52,
+                          color: isDark ? const Color(0xFF1C1C22) : const Color(0xFFF7F5F0),
+                          child: item["image"].toString().isEmpty
+                              ? const Icon(Icons.diamond_outlined, size: 20, color: AppColors.gold)
+                              : Image.asset(
+                                  item["image"],
+                                  width: 52,
+                                  height: 52,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) =>
+                                      const Icon(Icons.diamond_outlined, size: 20, color: AppColors.gold),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item["name"] ?? "Maison Masterpiece",
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppFonts.cinzel(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13.5,
                               ),
                             ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "Qty: ${item["quantity"]} × ₹${item["price"] ?? 0}",
+                              style: AppFonts.poppins(
+                                color: isDark ? Colors.white60 : Colors.black54,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+            const Divider(height: 18),
+            // Valuation & Tracking Button
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "TOTAL VALUATION",
+                      style: AppFonts.poppins(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: isDark ? Colors.white38 : Colors.black38,
+                      ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item["name"] ?? "",
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppFonts.poppins(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13.5,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            "Qty: ${item["quantity"]} × ₹${item["price"] ?? 0}",
-                            style: AppFonts.poppins(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                        ],
+                    const SizedBox(height: 2),
+                    Text(
+                      "₹${order["totalAmount"]}",
+                      style: AppFonts.cinzel(
+                        color: AppColors.brand(context),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
                       ),
                     ),
                   ],
                 ),
-              )),
-          const Divider(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Total Amount",
-                style: AppFonts.poppins(fontWeight: FontWeight.w500, fontSize: 13),
-              ),
-              Text(
-                "₹${order["totalAmount"]}",
-                style: AppFonts.cinzel(
-                  color: AppColors.brand(context),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 17,
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(140, 42),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () {
+                    openTracking(orderId.isNotEmpty ? orderId : trackingNum);
+                  },
+                  icon: const Icon(Icons.location_searching_rounded, size: 15, color: Colors.white),
+                  label: Text(
+                    "TRACK ESCORT",
+                    style: AppFonts.cinzel(
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.1,
+                      fontSize: 11.5,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // 6. EMPTY & NO SEARCH VIEWS
+  // =========================================================================
+  Widget buildEmptyView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.gold.withValues(alpha: 0.1),
+                border: Border.all(color: AppColors.gold.withValues(alpha: 0.25)),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: ElevatedButton.icon(
+              child: const Icon(
+                Icons.inventory_2_outlined,
+                size: 48,
+                color: AppColors.gold,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              "No Acquisitions Recorded",
+              textAlign: TextAlign.center,
+              style: AppFonts.cinzel(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "When you acquire jewellery pieces, your authentic certificates and live armored transit updates will be archived here.",
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(
+                fontSize: 12.5,
+                height: 1.5,
+                color: Colors.grey,
+              ),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                minimumSize: const Size(200, 48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
-              onPressed: () {
-                openTracking(orderId.isNotEmpty ? orderId : trackingNum);
-              },
-              icon: const Icon(Icons.location_searching_rounded, size: 18),
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.explore_outlined, size: 18),
               label: Text(
-                "TRACK ORDER LIVE",
-                style: AppFonts.cinzel(
+                "EXPLORE CATALOG",
+                style: AppFonts.poppins(
+                  fontSize: 12.5,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 1.1,
-                  fontSize: 13,
+                  letterSpacing: 1.2,
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildNoSearchResultsView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.search_off_rounded, size: 54, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              "No Matching Acquisitions",
+              style: AppFonts.cinzel(fontSize: 17, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Could not find '$searchQuery' in your active order list.",
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () {
+                openTracking(searchQuery);
+              },
+              icon: const Icon(Icons.location_searching_rounded, size: 16),
+              label: Text("Track '$searchQuery' Directly"),
+            ),
+          ],
+        ),
       ),
     );
   }

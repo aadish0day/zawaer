@@ -1,85 +1,96 @@
 import 'package:flutter/material.dart';
-import '../utils/text_styles.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/text_styles.dart';
 import '../utils/theme_controller.dart';
 import 'orders_screen.dart';
 import 'order_tracking_screen.dart';
+import 'offers_screen.dart';
 import 'wishlist_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() =>
-      _ProfileScreenState();
+  State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  String userName = "ZAWER User";
-  String userEmail = "user@email.com";
-  String userPhone = "";
-  String userAddress = "";
+  String userName = "Maison Patron";
+  String userEmail = "patron@zawer.com";
+  String userPhone = "+91 98765 43210";
+  String userAddress = "Royal Vault Residences, Mumbai";
+  int ordersCount = 0;
+  int wishlistCount = 0;
+  bool isLoadingStats = true;
 
   @override
   void initState() {
     super.initState();
-
     loadUserData();
+    loadProfileStats();
   }
 
   // =====================================================
-  // LOAD USER DATA
+  // LOAD USER PROFILE
   // =====================================================
-
   Future<void> loadUserData() async {
-    final SharedPreferences prefs =
-    await SharedPreferences.getInstance();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
 
-    final String savedName =
-        prefs.getString("userName") ?? "";
+    final String savedName = prefs.getString("userName") ?? "";
+    final String savedEmail = prefs.getString("userEmail") ?? "";
+    final String savedPhone = prefs.getString("userPhone") ?? "";
+    final String savedAddress = prefs.getString("savedAddress") ?? "";
 
-    final String savedEmail =
-        prefs.getString("userEmail") ?? "";
-
-    final String savedPhone =
-        prefs.getString("userPhone") ?? "";
-
-    final String savedAddress =
-        prefs.getString("savedAddress") ?? "";
-
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
-      if (savedName.isNotEmpty) {
-        userName = savedName;
-      }
-
-      if (savedEmail.isNotEmpty) {
-        userEmail = savedEmail;
-      }
-
-      userPhone = savedPhone;
-
-      userAddress = savedAddress;
+      if (savedName.isNotEmpty) userName = savedName;
+      if (savedEmail.isNotEmpty) userEmail = savedEmail;
+      if (savedPhone.isNotEmpty) userPhone = savedPhone;
+      if (savedAddress.isNotEmpty) userAddress = savedAddress;
     });
   }
 
-  // =====================================================
-  // EDIT PROFILE
-  // =====================================================
+  Future<void> loadProfileStats() async {
+    try {
+      final ordersRes = await ApiService.getOrders();
+      final wishRes = await ApiService.getWishlist();
 
+      if (!mounted) return;
+
+      int oCount = 0;
+      if (ordersRes["success"] == true && ordersRes["orders"] is List) {
+        oCount = (ordersRes["orders"] as List).length;
+      }
+
+      int wCount = 0;
+      if (wishRes["success"] == true && wishRes["wishlist"]?["items"] is List) {
+        wCount = (wishRes["wishlist"]["items"] as List).length;
+      }
+
+      setState(() {
+        ordersCount = oCount;
+        wishlistCount = wCount;
+        isLoadingStats = false;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          isLoadingStats = false;
+        });
+      }
+    }
+  }
+
+  // =====================================================
+  // EDIT PROFILE DIALOG
+  // =====================================================
   void showEditProfileDialog() {
-    final nameController =
-    TextEditingController(text: userName);
-
-    final phoneController =
-    TextEditingController(text: userPhone);
-
+    final nameController = TextEditingController(text: userName);
+    final phoneController = TextEditingController(text: userPhone);
     bool isSaving = false;
 
     showDialog(
@@ -87,152 +98,94 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
             return AlertDialog(
+              backgroundColor: isDark ? const Color(0xFF16161C) : Colors.white,
               shape: RoundedRectangleBorder(
-                borderRadius:
-                BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
               ),
-
               title: Text(
-                "Edit Profile",
-                style: AppFonts.cinzel(
-                  fontWeight: FontWeight.bold,
-                ),
+                "Edit Client Credentials",
+                style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 18),
               ),
-
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-
                   TextField(
                     controller: nameController,
-                    decoration:
-                    const InputDecoration(
-                      labelText: "Name",
-                      prefixIcon:
-                      Icon(Icons.person),
+                    style: AppFonts.poppins(fontSize: 13.5),
+                    decoration: InputDecoration(
+                      labelText: "Full Name",
+                      prefixIcon: const Icon(Icons.person_outline, color: AppColors.gold),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
-
-                  const SizedBox(height: 15),
-
+                  const SizedBox(height: 14),
                   TextField(
                     controller: phoneController,
-                    keyboardType:
-                    TextInputType.phone,
-                    decoration:
-                    const InputDecoration(
-                      labelText: "Phone",
-                      prefixIcon:
-                      Icon(Icons.phone),
+                    keyboardType: TextInputType.phone,
+                    style: AppFonts.poppins(fontSize: 13.5),
+                    decoration: InputDecoration(
+                      labelText: "Phone Number",
+                      prefixIcon: const Icon(Icons.phone_outlined, color: AppColors.gold),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
-
                 ],
               ),
-
               actions: [
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text("Cancel"),
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: Text("Cancel", style: AppFonts.poppins(color: Colors.grey)),
                 ),
-
                 ElevatedButton(
-                  style:
-                  ElevatedButton.styleFrom(
-                    backgroundColor:
-                    AppColors.primary,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-
                   onPressed: isSaving
                       ? null
                       : () async {
-                    final messenger =
-                    ScaffoldMessenger.of(context);
+                          HapticFeedback.selectionClick();
+                          setDialogState(() {
+                            isSaving = true;
+                          });
 
-                    setDialogState(() {
-                      isSaving = true;
-                    });
+                          final result = await ApiService.updateProfile(
+                            name: nameController.text.trim(),
+                            phone: phoneController.text.trim(),
+                          );
 
-                    final result =
-                    await ApiService
-                        .updateProfile(
-                      name: nameController
-                          .text
-                          .trim(),
-                      phone:
-                      phoneController.text
-                          .trim(),
-                    );
+                          if (result["success"] == true) {
+                            final SharedPreferences prefs = await SharedPreferences.getInstance();
+                            await prefs.setString("userName", nameController.text.trim());
+                            await prefs.setString("userPhone", phoneController.text.trim());
+                          }
 
-                    if (result["success"] ==
-                        true) {
-                      final SharedPreferences
-                      prefs =
-                      await SharedPreferences
-                          .getInstance();
+                          if (!dialogContext.mounted) return;
+                          Navigator.pop(dialogContext);
 
-                      await prefs.setString(
-                        "userName",
-                        nameController.text
-                            .trim(),
-                      );
-
-                      await prefs.setString(
-                        "userPhone",
-                        phoneController.text
-                            .trim(),
-                      );
-                    }
-
-                    if (!dialogContext.mounted) {
-                      return;
-                    }
-
-                    Navigator.pop(dialogContext);
-
-                    if (result["success"] ==
-                        true) {
-                      loadUserData();
-
-                      messenger.showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            "Profile updated successfully",
-                          ),
-                        ),
-                      );
-                    } else {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            result["message"]
-                                ?.toString() ??
-                                "Could not update profile",
-                          ),
-                        ),
-                      );
-                    }
-                  },
-
+                          if (result["success"] == true) {
+                            loadUserData();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                behavior: SnackBarBehavior.floating,
+                                content: Text("Credentials updated successfully"),
+                              ),
+                            );
+                          }
+                        },
                   child: isSaving
                       ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child:
-                    CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                      : const Text(
-                    "Save",
-                    style: TextStyle(
-                      color: Colors.white,
-                    ),
-                  ),
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : Text(
+                          "Save Changes",
+                          style: AppFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
                 ),
               ],
             );
@@ -243,162 +196,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // =====================================================
-  // LOGOUT
+  // SAVED ADDRESS DIALOG
   // =====================================================
-
-  Future<void> logoutUser() async {
-    final SharedPreferences prefs =
-    await SharedPreferences.getInstance();
-
-    await prefs.clear();
-
-    if (!mounted) {
-      return;
-    }
-
-    Navigator.pushNamedAndRemoveUntil(
-      context,
-      "/login",
-          (route) => false,
-    );
-  }
-
-  // =====================================================
-  // SETTINGS
-  // =====================================================
-
-  void showSettingsDialog() {
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-
-          title: Text(
-            "Settings",
-            style: AppFonts.cinzel(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-
-              ListTile(
-                leading:
-                const Icon(Icons.light_mode),
-                title:
-                const Text("Light Mode"),
-                onTap: () {
-                  ThemeController.setDarkMode(false);
-                  Navigator.pop(dialogContext);
-                },
-              ),
-
-              ListTile(
-                leading:
-                const Icon(Icons.dark_mode),
-                title:
-                const Text("Dark Mode"),
-                onTap: () {
-                  ThemeController.setDarkMode(true);
-                  Navigator.pop(dialogContext);
-                },
-              ),
-
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // =====================================================
-  // SAVED ADDRESS
-  // =====================================================
-
   void showSavedAddressDialog() {
-    final addressController =
-    TextEditingController(text: userAddress);
+    final addressController = TextEditingController(text: userAddress);
 
     showDialog(
       context: context,
       builder: (dialogContext) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF16161C) : Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
           ),
-
           title: Text(
-            "Saved Address",
-            style: AppFonts.cinzel(
-              fontWeight: FontWeight.bold,
-            ),
+            "Primary Vault Delivery Address",
+            style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 17),
           ),
-
           content: TextField(
             controller: addressController,
             maxLines: 3,
-            decoration: const InputDecoration(
+            style: AppFonts.poppins(fontSize: 13.5),
+            decoration: InputDecoration(
               labelText: "Delivery Address",
-              prefixIcon:
-              Icon(Icons.location_on),
+              hintText: "Enter suite, building, street, and pin code...",
+              prefixIcon: const Icon(Icons.location_on_outlined, color: AppColors.gold),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
             ),
           ),
-
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text("Cancel"),
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text("Cancel", style: AppFonts.poppins(color: Colors.grey)),
             ),
-
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor:
-                AppColors.primary,
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               onPressed: () async {
-                final messenger =
-                ScaffoldMessenger.of(context);
+                HapticFeedback.selectionClick();
+                final messenger = ScaffoldMessenger.of(context);
+                final SharedPreferences prefs = await SharedPreferences.getInstance();
+                await prefs.setString("savedAddress", addressController.text.trim());
 
-                final SharedPreferences prefs =
-                await SharedPreferences
-                    .getInstance();
-
-                await prefs.setString(
-                  "savedAddress",
-                  addressController.text.trim(),
-                );
-
-                if (!dialogContext.mounted) {
-                  return;
-                }
+                if (!dialogContext.mounted) return;
 
                 setState(() {
-                  userAddress =
-                      addressController.text.trim();
+                  userAddress = addressController.text.trim();
                 });
 
                 Navigator.pop(dialogContext);
-
                 messenger.showSnackBar(
                   const SnackBar(
-                    content: Text(
-                      "Address saved",
-                    ),
+                    behavior: SnackBarBehavior.floating,
+                    content: Text("Vault address updated"),
                   ),
                 );
               },
-              child: const Text(
-                "Save",
-                style: TextStyle(
-                  color: Colors.white,
-                ),
+              child: Text(
+                "Save Address",
+                style: AppFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -408,54 +268,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // =====================================================
-  // LOGOUT DIALOG
+  // LOGOUT
   // =====================================================
+  Future<void> logoutUser() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+
+    if (!mounted) return;
+
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      "/login",
+      (route) => false,
+    );
+  }
 
   void showLogoutDialog() {
     showDialog(
       context: context,
       builder: (dialogContext) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF16161C) : Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
           ),
-
           title: Text(
-            "Logout",
-            style: AppFonts.cinzel(
-              fontWeight: FontWeight.bold,
-            ),
+            "Maison Sign Out",
+            style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 18),
           ),
-
           content: Text(
-            "Are you sure you want to logout?",
-            style: AppFonts.poppins(),
+            "Are you sure you want to end your current vault session?",
+            style: AppFonts.poppins(fontSize: 13, color: Colors.grey),
           ),
-
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text("Cancel"),
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text("Stay Signed In", style: AppFonts.poppins(color: Colors.grey)),
             ),
-
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
+                backgroundColor: Colors.red.shade800,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-
               onPressed: () async {
                 Navigator.pop(dialogContext);
-
                 await logoutUser();
               },
-
-              child: const Text(
-                "Logout",
-                style: TextStyle(
-                  color: Colors.white,
-                ),
+              child: Text(
+                "Sign Out",
+                style: AppFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -464,408 +327,710 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // =====================================================
-  // BUILD
-  // =====================================================
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        elevation: 0,
-        centerTitle: true,
-
-        title: Text(
-          "My Profile",
-          style: AppFonts.cinzel(
-            color: Theme.of(context).colorScheme.onSurface,
-            fontWeight: FontWeight.bold,
+      backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
+      appBar: buildMaisonAppBar(isDark),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await Future.wait([loadUserData(), loadProfileStats()]);
+        },
+        color: AppColors.gold,
+        backgroundColor: isDark ? const Color(0xFF18181E) : Colors.white,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            children: [
+              // 1. VIP Client Identity Card
+              buildClientIdentityCard(isDark),
+              const SizedBox(height: 16),
+              // 2. Vault Quick Stats Hub
+              buildVaultStatsHub(isDark),
+              const SizedBox(height: 20),
+              // 3. Vault & Concierge Hub
+              buildSectionHeader("VAULT & CONCIERGE", isDark),
+              const SizedBox(height: 8),
+              buildHubGroup([
+                buildHubItem(
+                  icon: Icons.inventory_2_outlined,
+                  title: "Maison Orders & Invoices",
+                  subtitle: "$ordersCount previous acquired pieces",
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                  ).then((_) => loadProfileStats()),
+                ),
+                buildHubItem(
+                  icon: Icons.discount_outlined,
+                  title: "Privilege Offers & Vouchers",
+                  subtitle: "Exclusive coupons & flash promotions",
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OffersScreen()),
+                  ),
+                ),
+                buildHubItem(
+                  icon: Icons.local_shipping_outlined,
+                  title: "Live Armored Escort Tracking",
+                  subtitle: "Sequel Secure Luxury Logistics",
+                  onTap: showLiveTrackingLookupModal,
+                ),
+                buildHubItem(
+                  icon: Icons.favorite_border_rounded,
+                  title: "Curated Wishlist Vault",
+                  subtitle: "$wishlistCount precious pieces preserved",
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const WishlistScreen()),
+                  ).then((_) => loadProfileStats()),
+                ),
+                buildHubItem(
+                  icon: Icons.location_on_outlined,
+                  title: "Vault Delivery Address",
+                  subtitle: userAddress.isNotEmpty ? userAddress : "Set primary delivery address",
+                  onTap: showSavedAddressDialog,
+                ),
+              ], isDark),
+              const SizedBox(height: 20),
+              // 4. Maison Preferences
+              buildSectionHeader("MAISON PREFERENCES", isDark),
+              const SizedBox(height: 8),
+              buildHubGroup([
+                buildThemeToggleItem(isDark),
+                buildHubItem(
+                  icon: Icons.badge_outlined,
+                  title: "Client Credentials",
+                  subtitle: "Edit name and verified phone",
+                  onTap: showEditProfileDialog,
+                ),
+                buildHubItem(
+                  icon: Icons.diamond_outlined,
+                  title: "Bespoke Engraving & Consultation",
+                  subtitle: "Book private certified gemologist",
+                  onTap: showConciergeModal,
+                ),
+              ], isDark),
+              const SizedBox(height: 20),
+              // 5. Sign Out Button
+              buildSignOutButton(isDark),
+              const SizedBox(height: 32),
+              // 6. Maison Seal & Heritage Footer
+              buildMaisonHeritageFooter(isDark),
+              const SizedBox(height: 30),
+            ],
           ),
         ),
       ),
+    );
+  }
 
-      body: SingleChildScrollView(
+  // =========================================================================
+  // 1. APP BAR
+  // =========================================================================
+  PreferredSizeWidget buildMaisonAppBar(bool isDark) {
+    return AppBar(
+      backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
+      elevation: 0,
+      centerTitle: true,
+      title: Column(
+        children: [
+          Text(
+            "ZAWER MAISON",
+            style: AppFonts.cinzel(
+              fontSize: 10,
+              letterSpacing: 3.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.gold,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            "Client Profile",
+            style: AppFonts.cinzel(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.edit_outlined, size: 20),
+          tooltip: "Edit Profile",
+          onPressed: showEditProfileDialog,
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+
+  // =========================================================================
+  // 2. VIP CLIENT IDENTITY CARD (Double-Bezel Architecture)
+  // =========================================================================
+  Widget buildClientIdentityCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(1.2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          colors: [
+            AppColors.gold.withValues(alpha: 0.45),
+            AppColors.gold.withValues(alpha: 0.1),
+            Colors.transparent,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF141418) : Colors.white,
+          borderRadius: BorderRadius.circular(23),
+        ),
         child: Column(
           children: [
-
-            const SizedBox(height: 25),
-
-            // =====================================================
-            // PROFILE IMAGE
-            // =====================================================
-
-            CircleAvatar(
-              radius: 55,
-              backgroundColor: AppColors.primary,
-
-              child: CircleAvatar(
-                radius: 52,
-                backgroundColor: Theme.of(context).colorScheme.surface,
-                child: Icon(
-                  Icons.person,
-                  size: 60,
-                  color: AppColors.brand(context),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // =====================================================
-            // USER NAME
-            // =====================================================
-
-            Text(
-              userName,
-              textAlign: TextAlign.center,
-
-              style: AppFonts.cinzel(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 8),
-
-            // =====================================================
-            // USER EMAIL
-            // =====================================================
-
-            Text(
-              userEmail,
-              textAlign: TextAlign.center,
-
-              style: AppFonts.poppins(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 15,
-              ),
-            ),
-
-            if (userPhone.isNotEmpty) ...[
-              const SizedBox(height: 5),
-
-              Text(
-                userPhone,
-                style: AppFonts.poppins(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 35),
-
-            // =====================================================
-            // EDIT PROFILE
-            // =====================================================
-
-            buildTile(
-              Icons.person,
-              "Edit Profile",
-                  showEditProfileDialog,
-            ),
-
-            // =====================================================
-            // MY ORDERS
-            // =====================================================
-
-            buildTile(
-              Icons.shopping_bag,
-              "My Orders",
-              () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const OrdersScreen(),
+            Row(
+              children: [
+                // Avatar with Concentric Gold Halo
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      colors: [AppColors.gold, Color(0xFFFFF2D1), AppColors.gold],
+                    ),
                   ),
-                );
-              },
-            ),
-
-            // =====================================================
-            // TRACK AN ORDER
-            // =====================================================
-
-            buildTile(
-              Icons.location_searching_rounded,
-              "Track Order Live",
-              () {
-                final trackController = TextEditingController();
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    width: 66,
+                    height: 66,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isDark ? const Color(0xFF1D1D24) : const Color(0xFFF3EFE8),
                     ),
-                    title: Text(
-                      "Track Your Jewellery",
-                      style: AppFonts.cinzel(fontWeight: FontWeight.bold),
-                    ),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          "Enter your Order ID or Tracking Number (e.g. ZWR-XXXXXX) to view live vault status & transit updates.",
-                          style: AppFonts.poppins(fontSize: 12.5),
+                    child: Center(
+                      child: Text(
+                        userName.isNotEmpty ? userName[0].toUpperCase() : "Z",
+                        style: AppFonts.cinzel(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.brand(context),
                         ),
-                        const SizedBox(height: 16),
-                        TextField(
-                          controller: trackController,
-                          decoration: InputDecoration(
-                            labelText: "Order ID / Tracking Number",
-                            prefixIcon: const Icon(Icons.qr_code_scanner),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Name & VIP Badge
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.gold.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: AppColors.gold.withValues(alpha: 0.5),
+                            width: 0.7,
                           ),
                         ),
-                      ],
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text("Cancel"),
+                        child: Text(
+                          "HERITAGE PATRON • TIER I",
+                          style: AppFonts.poppins(
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.2,
+                            color: AppColors.gold,
+                          ),
+                        ),
                       ),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                        onPressed: () {
-                          final query = trackController.text.trim();
-                          if (query.isNotEmpty) {
-                            Navigator.pop(ctx);
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => OrderTrackingScreen(orderId: query),
-                              ),
-                            );
-                          }
-                        },
-                        child: const Text("Track Now", style: TextStyle(color: Colors.white)),
+                      const SizedBox(height: 6),
+                      Text(
+                        userName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppFonts.cinzel(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        userEmail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppFonts.poppins(
+                          fontSize: 12,
+                          color: isDark ? Colors.white54 : Colors.black54,
+                        ),
                       ),
                     ],
                   ),
-                );
-              },
-            ),
-
-            // =====================================================
-            // WISHLIST
-            // =====================================================
-
-            buildTile(
-              Icons.favorite,
-              "Wishlist",
-              () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const WishlistScreen(),
-                  ),
-                );
-              },
-            ),
-
-            // =====================================================
-            // SAVED ADDRESS
-            // =====================================================
-
-            buildTile(
-              Icons.location_on,
-              "Saved Address",
-                  showSavedAddressDialog,
-            ),
-
-            // =====================================================
-            // SETTINGS
-            // =====================================================
-
-            buildTile(
-              Icons.settings,
-              "Settings",
-                  showSettingsDialog,
-            ),
-
-            // =====================================================
-            // DARK MODE
-            // =====================================================
-
-            Card(
-              margin: const EdgeInsets.symmetric(
-                horizontal: 15,
-                vertical: 6,
-              ),
-
-              elevation: 2,
-
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-
-              child: SwitchListTile(
-                activeThumbColor: Theme.of(context).colorScheme.primary,
-
-                title: Text(
-                  "Dark Mode",
-                  style: AppFonts.poppins(
-                    fontWeight: FontWeight.w600,
-                  ),
                 ),
-
-                secondary: CircleAvatar(
-                  backgroundColor:
-                  Theme.of(context).colorScheme.primary.withValues(
-                    alpha: 0.1,
-                  ),
-
-                  child: Icon(
-                    Icons.dark_mode,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-
-                value: ThemeController.mode.value ==
-                    ThemeMode.dark,
-
-                onChanged: (value) {
-                  ThemeController.setDarkMode(value);
-                },
-              ),
+              ],
             ),
-
-            const SizedBox(height: 20),
-
-            // =====================================================
-            // LOGOUT BUTTON
-            // =====================================================
-
-            SizedBox(
-              width: double.infinity,
-
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                ),
-
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-
-                    minimumSize:
-                    const Size(
-                      double.infinity,
-                      55,
+            const Divider(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.phone_outlined, size: 14, color: AppColors.gold),
+                    const SizedBox(width: 6),
+                    Text(
+                      userPhone.isNotEmpty ? userPhone : "No phone registered",
+                      style: AppFonts.poppins(
+                        fontSize: 11.5,
+                        color: isDark ? Colors.white60 : Colors.black54,
+                      ),
                     ),
-
-                    shape:
-                    RoundedRectangleBorder(
-                      borderRadius:
-                      BorderRadius.circular(15),
-                    ),
-                  ),
-
-                  icon: const Icon(
-                    Icons.logout,
-                    color: Colors.white,
-                  ),
-
-                  label: Text(
-                    "LOGOUT",
-
-                    style: AppFonts.cinzel(
-                      color: Colors.white,
+                  ],
+                ),
+                InkWell(
+                  onTap: showEditProfileDialog,
+                  child: Text(
+                    "Edit Details →",
+                    style: AppFonts.poppins(
+                      fontSize: 11.5,
                       fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      color: AppColors.brand(context),
                     ),
                   ),
-
-                  onPressed: showLogoutDialog,
                 ),
-              ),
+              ],
             ),
-
-            const SizedBox(height: 35),
-
-            // =====================================================
-            // FOOTER
-            // =====================================================
-
-            Text(
-              "ZAWER Jewellery",
-              style: AppFonts.cinzel(
-                fontSize: 24,
-                color: AppColors.brand(context),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 8),
-
-            Text(
-              "Luxury Jewellery Since 2026",
-              style: AppFonts.poppins(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 15,
-              ),
-            ),
-
-            const SizedBox(height: 25),
           ],
         ),
       ),
     );
   }
 
-  // =====================================================
-  // PROFILE TILE
-  // =====================================================
-
-  Widget buildTile(
-      IconData icon,
-      String title,
-      VoidCallback onTap,
-      ) {
-    return Card(
-      margin: const EdgeInsets.symmetric(
-        horizontal: 15,
-        vertical: 6,
-      ),
-
-      elevation: 2,
-
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(15),
-      ),
-
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor:
-          Theme.of(context).colorScheme.primary.withValues(
-            alpha: 0.1,
-          ),
-
-          child: Icon(
-            icon,
-            color: Theme.of(context).colorScheme.primary,
+  // =========================================================================
+  // 3. VAULT STATS QUICK HUB
+  // =========================================================================
+  Widget buildVaultStatsHub(bool isDark) {
+    return Row(
+      children: [
+        Expanded(
+          child: buildStatBox(
+            label: "ACQUISITIONS",
+            value: ordersCount.toString(),
+            icon: Icons.inventory_2_outlined,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const OrdersScreen()),
+            ).then((_) => loadProfileStats()),
+            isDark: isDark,
           ),
         ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: buildStatBox(
+            label: "WISHLIST",
+            value: wishlistCount.toString(),
+            icon: Icons.favorite_border_rounded,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const WishlistScreen()),
+            ).then((_) => loadProfileStats()),
+            isDark: isDark,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: buildStatBox(
+            label: "ESCORT",
+            value: "LIVE",
+            icon: Icons.security_outlined,
+            onTap: showLiveTrackingLookupModal,
+            isDark: isDark,
+          ),
+        ),
+      ],
+    );
+  }
 
-        title: Text(
+  Widget buildStatBox({
+    required String label,
+    required String value,
+    required IconData icon,
+    required VoidCallback onTap,
+    required bool isDark,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF141418) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 18, color: AppColors.gold),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: AppFonts.cinzel(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: AppFonts.poppins(
+                fontSize: 8.5,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.1,
+                color: isDark ? Colors.white38 : Colors.black38,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // 4. BESPOKE SECTION HUB & GROUP ITEMS
+  // =========================================================================
+  Widget buildSectionHeader(String title, bool isDark) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: Text(
           title,
           style: AppFonts.poppins(
-            fontWeight: FontWeight.w600,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.6,
+            color: AppColors.gold,
           ),
         ),
-
-        trailing: const Icon(
-          Icons.arrow_forward_ios,
-          size: 18,
-        ),
-
-        onTap: onTap,
       ),
+    );
+  }
+
+  Widget buildHubGroup(List<Widget> children, bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141418) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Column(
+        children: children,
+      ),
+    );
+  }
+
+  Widget buildHubItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.gold.withValues(alpha: 0.1),
+              ),
+              child: Icon(icon, size: 18, color: AppColors.gold),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: AppFonts.cinzel(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppFonts.poppins(
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: Colors.grey),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildThemeToggleItem(bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.gold.withValues(alpha: 0.1),
+            ),
+            child: Icon(
+              isDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+              size: 18,
+              color: AppColors.gold,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "High-Contrast Dark Mode",
+                  style: AppFonts.cinzel(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isDark ? "Obsidian luxury theme active" : "Champagne light theme active",
+                  style: AppFonts.poppins(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: ThemeController.mode.value == ThemeMode.dark,
+            activeThumbColor: AppColors.gold,
+            activeTrackColor: AppColors.gold.withValues(alpha: 0.35),
+            onChanged: (val) {
+              HapticFeedback.selectionClick();
+              ThemeController.setDarkMode(val);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // =========================================================================
+  // 5. SIGN OUT BUTTON
+  // =========================================================================
+  Widget buildSignOutButton(bool isDark) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.redAccent,
+          side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.35)),
+          minimumSize: const Size(double.infinity, 48),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        onPressed: showLogoutDialog,
+        icon: const Icon(Icons.logout_rounded, size: 16),
+        label: Text(
+          "SIGN OUT OF MAISON SESSION",
+          style: AppFonts.poppins(
+            fontSize: 11.5,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // 6. MAISON HERITAGE SEAL & FOOTER
+  // =========================================================================
+  Widget buildMaisonHeritageFooter(bool isDark) {
+    return Column(
+      children: [
+        Icon(
+          Icons.diamond_outlined,
+          size: 24,
+          color: AppColors.gold.withValues(alpha: 0.4),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          "ZAWER MAISON DE HAUTE JOAILLERIE",
+          style: AppFonts.cinzel(
+            fontSize: 11,
+            letterSpacing: 2.5,
+            fontWeight: FontWeight.bold,
+            color: AppColors.gold,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          "BIS 916 Hallmarked • IGI Certified Natural Diamonds",
+          style: AppFonts.poppins(
+            fontSize: 9.5,
+            color: isDark ? Colors.white38 : Colors.black38,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // =========================================================================
+  // MODALS & HELPERS
+  // =========================================================================
+  void showLiveTrackingLookupModal() {
+    final trackController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF16161C) : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+          ),
+          title: Text(
+            "Armored Transit Lookup",
+            style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 17),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Enter your Order ID or Tracking Number (e.g. ZWR-XXXXXX) to monitor live armored transit.",
+                style: AppFonts.poppins(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: trackController,
+                style: AppFonts.poppins(fontSize: 13.5),
+                decoration: InputDecoration(
+                  labelText: "Tracking ID (e.g. ZWR-847762)",
+                  prefixIcon: const Icon(Icons.qr_code_scanner, color: AppColors.gold),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text("Cancel", style: AppFonts.poppins(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () {
+                final query = trackController.text.trim();
+                if (query.isNotEmpty) {
+                  Navigator.pop(ctx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => OrderTrackingScreen(orderId: query),
+                    ),
+                  );
+                }
+              },
+              child: Text(
+                "Track Transit",
+                style: AppFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void showConciergeModal() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF16161C) : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+          ),
+          title: Text(
+            "Private Diamond Concierge",
+            style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 17),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.gold.withValues(alpha: 0.15),
+                ),
+                child: const Icon(Icons.support_agent_rounded, size: 36, color: AppColors.gold),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                "As a ZAWER Heritage Patron, you are entitled to private gemologist consultations, custom laser engravings, and bridal trousseau styling.",
+                textAlign: TextAlign.center,
+                style: AppFonts.poppins(fontSize: 12, height: 1.5, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text("Close", style: AppFonts.poppins(color: Colors.white)),
+            ),
+          ],
+        );
+      },
     );
   }
 }
