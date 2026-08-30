@@ -167,238 +167,200 @@ class _OrdersScreenState
       statusColor = Colors.red;
     }
 
-    return Container(
-
-      margin: const EdgeInsets.only(bottom: 18),
-
-      padding: const EdgeInsets.all(15),
-
-      decoration: BoxDecoration(
-
-        color: Theme.of(context).colorScheme.surface,
-
-        borderRadius: BorderRadius.circular(20),
-
-        boxShadow: [
-
-          BoxShadow(
-            color: Colors.black.withValues(alpha: .08),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-
-        ],
-
-      ),
-
-      child: Column(
-
-        crossAxisAlignment: CrossAxisAlignment.start,
-
-        children: [
-
-          Row(
-
-            mainAxisAlignment:
-            MainAxisAlignment.spaceBetween,
-
-            children: [
-
-              Text(
-                "Order #${order["_id"]
-                    ?.toString()
-                    .substring(0, 8) ?? ""}",
-                style: AppFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: .12),
-                  borderRadius:
-                  BorderRadius.circular(12),
-                ),
-                child: Text(
-                  status,
-                  style: AppFonts.poppins(
-                    color: statusColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-
-            ],
-
-          ),
-
-          const SizedBox(height: 6),
-
-          Text(
-            "Placed on ${_formatDate(order["createdAt"]?.toString() ?? "")}",
-            style: AppFonts.poppins(
-              color: Theme.of(context)
-                  .colorScheme.onSurfaceVariant,
-              fontSize: 13,
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: () async {
+        final orderId = order["_id"]?.toString() ?? "";
+        if (orderId.isNotEmpty) {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => OrderTrackingScreen(orderId: orderId),
             ),
-          ),
-
-          const Divider(height: 25),
-
-          ...items.map((item) => Padding(
-            padding:
-            const EdgeInsets.only(bottom: 10),
-            child: Row(
+          );
+          loadOrders();
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 18),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: .08),
+              blurRadius: 10,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-
-                ClipRRect(
-                  borderRadius:
-                  BorderRadius.circular(10),
-                  child: item["image"].toString()
-                      .isEmpty
-                      ? Container(
-                    width: 55,
-                    height: 55,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .surfaceContainerHighest,
-                    child: const Icon(
-                      Icons.image_not_supported,
-                      size: 22,
+                Text(
+                  "Order #${order["_id"]?.toString().substring(0, 8) ?? ""}",
+                  style: AppFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    status,
+                    style: AppFonts.poppins(
+                      color: statusColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                     ),
-                  )
-                      : Image.asset(
-                    item["image"],
-                    width: 55,
-                    height: 55,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context,
-                        error, stackTrace) {
-                      return Container(
-                        width: 55,
-                        height: 55,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                        child: const Icon(
-                          Icons
-                              .image_not_supported,
-                          size: 22,
-                        ),
-                      );
-                    },
                   ),
                 ),
-
-                const SizedBox(width: 12),
-
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                    CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item["name"] ?? "",
-                        maxLines: 1,
-                        overflow:
-                        TextOverflow.ellipsis,
-                        style: AppFonts.poppins(
-                          fontWeight:
-                          FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        "Qty: ${item["quantity"]}",
-                        style: AppFonts.poppins(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
               ],
             ),
-          )),
-
-          const Divider(height: 5),
-
-          const SizedBox(height: 10),
-
-          Row(
-            mainAxisAlignment:
-            MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Total",
-                style: AppFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                ),
+            const SizedBox(height: 6),
+            Text(
+              "Placed on ${_formatDate(order["createdAt"]?.toString() ?? "")}",
+              style: AppFonts.poppins(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontSize: 13,
               ),
-              Text(
-                "₹${order["totalAmount"]}",
-                style: AppFonts.cinzel(
-                  color: AppColors.brand(context),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 14),
-
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.brand(context),
-                side: BorderSide(
-                  color: AppColors.gold,
-                  width: 1.2,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () {
-                final orderId = order["_id"]?.toString() ?? "";
-                if (orderId.isNotEmpty) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => OrderTrackingScreen(orderId: orderId),
+            ),
+            const Divider(height: 25),
+            ...items.map((item) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: item["image"].toString().isEmpty
+                        ? Container(
+                            width: 55,
+                            height: 55,
+                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            child: const Icon(
+                              Icons.image_not_supported,
+                              size: 22,
+                            ),
+                          )
+                        : Image.asset(
+                            item["image"],
+                            width: 55,
+                            height: 55,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                width: 55,
+                                height: 55,
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                child: const Icon(
+                                  Icons.image_not_supported,
+                                  size: 22,
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item["name"] ?? "",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          "Qty: ${item["quantity"]}",
+                          style: AppFonts.poppins(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.location_searching_rounded, size: 18),
-              label: Text(
-                "TRACK ORDER",
-                style: AppFonts.cinzel(
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                  fontSize: 13,
+                  ),
+                ],
+              ),
+            )),
+            const Divider(height: 5),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Total",
+                  style: AppFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  "₹${order["totalAmount"]}",
+                  style: AppFonts.cinzel(
+                    color: AppColors.brand(context),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.brand(context),
+                  side: BorderSide(
+                    color: AppColors.gold,
+                    width: 1.2,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () async {
+                  final orderId = order["_id"]?.toString() ?? "";
+                  if (orderId.isNotEmpty) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => OrderTrackingScreen(orderId: orderId),
+                      ),
+                    );
+                    loadOrders();
+                  }
+                },
+                icon: const Icon(Icons.location_searching_rounded, size: 18),
+                label: Text(
+                  "TRACK ORDER",
+                  style: AppFonts.cinzel(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                    fontSize: 13,
+                  ),
                 ),
               ),
             ),
-          ),
-
-        ],
+          ],
+        ),
       ),
-
     );
 
   }
