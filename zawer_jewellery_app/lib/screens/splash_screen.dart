@@ -36,26 +36,30 @@ class _SplashScreenState extends State<SplashScreen> {
 
     if (!mounted) return;
 
-    // Decide where to go.
+    // Decide where to go safely without leaving Navigator history empty
     if (token.isNotEmpty) {
-      Navigator.pushReplacementNamed(
+      Navigator.pushNamedAndRemoveUntil(
         context,
         "/bottomNav",
+        (route) => false,
       );
     } else {
-      Navigator.pushReplacementNamed(
+      Navigator.pushNamedAndRemoveUntil(
         context,
         "/login",
+        (route) => false,
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: Colors.white,
 
-      body: Center(
+        body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
 
@@ -135,6 +139,7 @@ class _SplashScreenState extends State<SplashScreen> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
 }
+}

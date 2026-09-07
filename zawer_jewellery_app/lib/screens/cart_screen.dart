@@ -9,7 +9,8 @@ import 'login_screen.dart';
 import 'product_details_screen.dart';
 
 class CartScreen extends StatefulWidget {
-  const CartScreen({super.key});
+  final String? couponCode;
+  const CartScreen({super.key, this.couponCode});
 
   @override
   State<CartScreen> createState() => CartScreenState();
@@ -81,7 +82,7 @@ class CartScreenState extends State<CartScreen> {
 
         joined.add({
           "productId": productId,
-          "quantity": item["quantity"] ?? 1,
+          "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
           "name": product?.name ?? "Handcrafted Jewellery Piece",
           "category": product?.category ?? "Jewellery",
           "description": product?.description ?? "",
@@ -182,7 +183,9 @@ class CartScreenState extends State<CartScreen> {
   double get subtotal {
     double sum = 0;
     for (final item in cartItems) {
-      sum += (item["price"] as num) * (item["quantity"] as num);
+      final price = (item["price"] as num?)?.toDouble() ?? 0.0;
+      final quantity = (item["quantity"] as num?)?.toInt() ?? 1;
+      sum += price * quantity;
     }
     return sum;
   }
@@ -190,7 +193,7 @@ class CartScreenState extends State<CartScreen> {
   int get totalPieces {
     int sum = 0;
     for (final item in cartItems) {
-      sum += (item["quantity"] as int? ?? 1);
+      sum += (item["quantity"] as num?)?.toInt() ?? 1;
     }
     return sum;
   }
@@ -246,21 +249,27 @@ class CartScreenState extends State<CartScreen> {
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       elevation: 0,
       centerTitle: true,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
-              color: isDark ? const Color(0xFF18181D) : Colors.white,
-            ),
-            child: const Icon(Icons.arrow_back_ios_new, size: 16),
-          ),
-        ),
-      ),
+      leading: Navigator.canPop(context)
+          ? Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+                    color: isDark ? const Color(0xFF18181D) : Colors.white,
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new, size: 16),
+                ),
+              ),
+            )
+          : null,
       title: Column(
         children: [
           Text(
@@ -363,8 +372,8 @@ class CartScreenState extends State<CartScreen> {
       images: imagesList,
     );
 
-    final quantity = item["quantity"] as int;
-    final itemPrice = (item["price"] as num).toDouble();
+    final quantity = (item["quantity"] as num?)?.toInt() ?? 1;
+    final itemPrice = (item["price"] as num?)?.toDouble() ?? 0.0;
     final itemSubtotal = itemPrice * quantity;
 
     return Container(
@@ -722,7 +731,9 @@ class CartScreenState extends State<CartScreen> {
                   HapticFeedback.mediumImpact();
                   await Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const CheckoutScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
+                    ),
                   );
                   loadCart();
                 },
@@ -877,7 +888,15 @@ class CartScreenState extends State<CartScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: () {
-                Navigator.pop(context);
+                if (Navigator.canPop(context)) {
+                  Navigator.pop(context);
+                } else {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    "/bottomNav",
+                    (route) => false,
+                  );
+                }
               },
               icon: const Icon(Icons.explore_outlined, size: 18),
               label: Text(

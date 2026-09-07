@@ -222,11 +222,19 @@ const forgotPassword = async (req, res) => {
 
     await user.save();
 
-    return res.status(200).json({
+    console.log(`[AUTH] Reset OTP for ${email}: ${otp}`);
+
+    const isProduction = process.env.NODE_ENV === "production";
+    const responsePayload = {
       success: true,
-      message: "OTP sent successfully",
-      otp: otp,
-    });
+      message: "OTP sent to registered email",
+    };
+
+    if (!isProduction) {
+      responsePayload.devOtp = otp;
+    }
+
+    return res.status(200).json(responsePayload);
   } catch (error) {
     return res.status(500).json({
       success: false,
@@ -293,4 +301,4 @@ module.exports = {
   updateProfile,
   forgotPassword,
   resetPassword,
-};
+};

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -53,13 +55,25 @@ class ApiService {
   // BACKEND URL
   // =========================================================
   //
-  // Default: 10.0.2.2 -> host PC's localhost from the Android
-  // emulator. For physical devices: pass --dart-define=API_BASE_URL=http://192.168.x.x:5000
+  // Adaptive and platform-aware backend URL:
+  // - kIsWeb: http://localhost:5000
+  // - Platform.isAndroid: http://10.0.2.2:5000
+  // - Else (iOS, macOS, Linux, Windows): http://localhost:5000
+  // Overridable via --dart-define=API_BASE_URL=...
   //
-  static const String baseUrl = String.fromEnvironment(
-    "API_BASE_URL",
-    defaultValue: "http://10.0.2.2:5000",
-  );
+  static String get baseUrl {
+    const envUrl = String.fromEnvironment("API_BASE_URL");
+    if (envUrl.isNotEmpty) {
+      return envUrl;
+    }
+    if (kIsWeb) {
+      return "http://localhost:5000";
+    }
+    if (Platform.isAndroid) {
+      return "http://10.0.2.2:5000";
+    }
+    return "http://localhost:5000";
+  }
 
   // =========================================================
   // GET SAVED TOKEN

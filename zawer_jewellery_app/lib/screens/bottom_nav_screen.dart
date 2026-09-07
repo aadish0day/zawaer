@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../utils/colors.dart';
 import 'home_screen.dart';
@@ -40,9 +41,21 @@ class _BottomNavScreenState
   @override
   Widget build(BuildContext context) {
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (currentIndex != 0) {
+          setState(() {
+            currentIndex = 0;
+          });
+        } else {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
 
-      body: IndexedStack(
+        body: IndexedStack(
         index: currentIndex,
         children: screens,
       ),
@@ -116,8 +129,10 @@ class _BottomNavScreenState
 
       ),
 
+    ),
+
     );
 
   }
 
-}
+}

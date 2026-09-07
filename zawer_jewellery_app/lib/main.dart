@@ -89,15 +89,16 @@ class ZawerJewelleryApp extends StatelessWidget {
 
           themeMode: mode,
 
-          initialRoute: "/",
+          home: const SplashScreen(),
 
-      routes: {
+          onUnknownRoute: (settings) => MaterialPageRoute(
+            builder: (_) => const SplashScreen(),
+          ),
+
+          routes: {
         // ==========================
         // MAIN ROUTES
         // ==========================
-
-        "/": (context) =>
-        const SplashScreen(),
 
         "/login": (context) =>
         const LoginScreen(),
@@ -144,4 +145,4 @@ class ZawerJewelleryApp extends StatelessWidget {
       },
     );
   }
-}
+}

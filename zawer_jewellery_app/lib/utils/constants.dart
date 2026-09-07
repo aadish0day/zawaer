@@ -5,6 +5,6 @@ class AppConstants {
   static const String slogan =
       "Luxury Jewellery Collection";
 
-  static const String logo = "assets/images/logo.png";
+  static const String logo = "assets/images/ring.png";
 
-}
+}

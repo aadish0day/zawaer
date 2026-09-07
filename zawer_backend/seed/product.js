@@ -10,7 +10,7 @@ const products = [
     name: "Royal Diamond Ring",
     category: "Ring",
     description: "Luxury diamond ring crafted in 18K gold.",
-    price: 25999,
+    price: 30000,
     rating: 4.9,
     images: ["assets/images/ring.png", "assets/images/ring1.png", "assets/images/ring2.png"],
   },
@@ -192,6 +192,24 @@ const products = [
     price: 10999,
     rating: 4.5,
     images: ["assets/images/bracelet.png", "assets/images/bracelet2.png", "assets/images/bracelet1.png"],
+  },
+  {
+    id: "prod_necklace_01",
+    name: "24K Royal Polki Necklace",
+    category: "Necklace",
+    description: "24K Royal Polki Necklace crafted with uncut diamonds.",
+    price: 320000,
+    rating: 5.0,
+    images: ["assets/images/necklace1.jpg"],
+  },
+  {
+    id: "prod_ring_01",
+    name: "Solitaire Diamond Ring",
+    category: "Ring",
+    description: "Imperial Solitaire Diamond Ring.",
+    price: 185000,
+    rating: 4.9,
+    images: ["assets/images/ring1.png"],
   },
 ];
 

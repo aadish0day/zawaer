@@ -16,8 +16,17 @@ const cartItemSchema = new mongoose.Schema(
   },
   {
     _id: false,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
+
+cartItemSchema.virtual("product", {
+  ref: "Product",
+  localField: "productId",
+  foreignField: "id",
+  justOne: true,
+});
 
 const cartSchema = new mongoose.Schema(
   {
@@ -35,7 +44,16 @@ const cartSchema = new mongoose.Schema(
   {
     timestamps: true,
     collection: "carts",
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-module.exports = mongoose.model("Cart", cartSchema);
+cartSchema.virtual("product", {
+  ref: "Product",
+  localField: "productId",
+  foreignField: "id",
+  justOne: true,
+});
+
+module.exports = mongoose.model("Cart", cartSchema);

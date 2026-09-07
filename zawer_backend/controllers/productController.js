@@ -1,14 +1,30 @@
 const Product = require("../models/Product");
 
+function escapeRegex(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const getProducts = async (req, res) => {
   try {
-    const products = await Product.find().sort({
-      createdAt: -1,
-    });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit, 10) || 50);
+    const skip = (page - 1) * limit;
+
+    const total = await Product.countDocuments();
+    const products = await Product.find()
+      .sort({
+        createdAt: -1,
+      })
+      .skip(skip)
+      .limit(limit);
 
     return res.status(200).json({
       success: true,
       count: products.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
       products,
     });
   } catch (error) {
@@ -56,7 +72,8 @@ const getProductById = async (req, res) => {
 
 const searchProducts = async (req, res) => {
   try {
-    const search = req.query.search || "";
+    const rawSearch = req.query.search || "";
+    const search = escapeRegex(rawSearch.toString().trim());
 
     const products = await Product.find({
       $or: [
@@ -212,4 +229,4 @@ module.exports = {
   searchProducts,
   addProductReview,
   getProductReviews,
-};
+};

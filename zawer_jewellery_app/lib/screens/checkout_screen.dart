@@ -8,7 +8,12 @@ import 'order_tracking_screen.dart';
 import 'offers_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
-  const CheckoutScreen({super.key});
+  final String? initialCouponCode;
+
+  const CheckoutScreen({
+    super.key,
+    this.initialCouponCode,
+  });
 
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
@@ -35,6 +40,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialCouponCode != null && widget.initialCouponCode!.trim().isNotEmpty) {
+      couponController.text = widget.initialCouponCode!.trim().toUpperCase();
+    }
     loadCheckoutData();
   }
 
@@ -84,9 +92,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
         joined.add({
           "productId": productId,
-          "quantity": item["quantity"] ?? 1,
+          "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
           "name": product?["name"]?.toString() ?? "Handcrafted Jewellery Piece",
-          "price": (product?["price"] as num?) ?? 0,
+          "price": (product?["price"] as num?)?.toDouble() ?? 0.0,
           "category": product?["category"]?.toString() ?? "Jewellery",
           "image": (product?["images"] as List?) is List &&
                   ((product?["images"] as List).isNotEmpty)
@@ -99,6 +107,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         cartItems = joined;
         isLoading = false;
       });
+
+      if (widget.initialCouponCode != null &&
+          widget.initialCouponCode!.trim().isNotEmpty &&
+          joined.isNotEmpty) {
+        applyCoupon();
+      }
     } else {
       setState(() {
         isLoading = false;
@@ -109,7 +123,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   int get itemCount {
     int count = 0;
     for (final item in cartItems) {
-      count += item["quantity"] as int;
+      count += (item["quantity"] as num?)?.toInt() ?? 1;
     }
     return count;
   }
@@ -117,7 +131,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   double get subtotal {
     double sum = 0;
     for (final item in cartItems) {
-      sum += (item["price"] as num) * (item["quantity"] as num);
+      final price = (item["price"] as num?)?.toDouble() ?? 0.0;
+      final quantity = (item["quantity"] as num?)?.toInt() ?? 1;
+      sum += price * quantity;
     }
     return sum;
   }
@@ -142,9 +158,25 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       couponSuccessMessage = "";
     });
 
+    String? qualifyingCategory;
+    for (final item in cartItems) {
+      final cat = item["category"]?.toString();
+      if (cat != null && cat.isNotEmpty) {
+        if (code.toLowerCase().contains(cat.toLowerCase()) ||
+            (code.contains("SOLITAIRE") && cat.toLowerCase() == "ring") ||
+            (code.contains("BRIDAL") && cat.toLowerCase() == "necklace") ||
+            (code.contains("GOLD") && cat.toLowerCase() == "chain")) {
+          qualifyingCategory = cat;
+          break;
+        }
+      }
+    }
+    qualifyingCategory ??= cartItems.isNotEmpty ? cartItems.first["category"]?.toString() : null;
+
     final result = await ApiService.validateCoupon(
       code: code,
       subtotal: subtotal,
+      category: qualifyingCategory,
     );
 
     if (!mounted) return;
@@ -301,7 +333,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 TextButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    Navigator.pop(context);
+                    if (Navigator.canPop(context)) {
+                      Navigator.pop(context);
+                    } else {
+                      Navigator.pushNamedAndRemoveUntil(
+                        context,
+                        "/bottomNav",
+                        (route) => false,
+                      );
+                    }
                   },
                   child: Text("Return to Catalog", style: AppFonts.poppins(color: Colors.grey)),
                 ),
@@ -381,21 +421,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       elevation: 0,
       centerTitle: true,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
-              color: isDark ? const Color(0xFF18181D) : Colors.white,
-            ),
-            child: const Icon(Icons.arrow_back_ios_new, size: 16),
-          ),
-        ),
-      ),
+      leading: Navigator.canPop(context)
+          ? Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+                    color: isDark ? const Color(0xFF18181D) : Colors.white,
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new, size: 16),
+                ),
+              ),
+            )
+          : null,
       title: Column(
         children: [
           Text(

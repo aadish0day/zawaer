@@ -69,9 +69,6 @@ const productSchema = new mongoose.Schema(
 
     originalPrice: {
       type: Number,
-      default: function () {
-        return this.price;
-      },
     },
 
     discountPercentage: {
@@ -109,5 +106,14 @@ const productSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+productSchema.index({ category: 1 });
+productSchema.index({ isSpecialOffer: 1 });
+
+productSchema.pre("validate", function () {
+  if (this.originalPrice == null && this.price != null) {
+    this.originalPrice = this.price;
+  }
+});
 
 module.exports = mongoose.model("Product", productSchema);

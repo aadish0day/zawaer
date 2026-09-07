@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
+const Product = require("../models/Product");
+const Cart = require("../models/Cart");
+const Offer = require("../models/Offer");
 
 const TRACKING_STAGES = [
   {
@@ -94,6 +97,11 @@ function updateTimelineForStatus(timeline, currentStatus) {
   });
 }
 
+function escapeRegex(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const findOrderFlexible = async (query, userId = null) => {
   if (!query) return null;
   const trimmed = query.toString().trim();
@@ -106,9 +114,11 @@ const findOrderFlexible = async (query, userId = null) => {
     if (order) return order;
   }
 
+  const safeQuery = escapeRegex(trimmed);
+
   // Try by exact tracking number (case-insensitive)
   const criteriaTracking = {
-    trackingNumber: { $regex: new RegExp(`^${trimmed}$`, "i") },
+    trackingNumber: { $regex: new RegExp(`^${safeQuery}$`, "i") },
   };
   if (userId) criteriaTracking.userId = userId;
   const orderTracking = await Order.findOne(criteriaTracking);
@@ -116,7 +126,7 @@ const findOrderFlexible = async (query, userId = null) => {
 
   // Fallback: If not found under user, but tracking number matches globally
   const globalTracking = await Order.findOne({
-    trackingNumber: { $regex: new RegExp(`^${trimmed}$`, "i") },
+    trackingNumber: { $regex: new RegExp(`^${safeQuery}$`, "i") },
   });
   return globalTracking;
 };
@@ -124,7 +134,7 @@ const findOrderFlexible = async (query, userId = null) => {
 const placeOrder = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { customerName, phone, address, paymentMethod, items } = req.body;
+    const { customerName, phone, address, paymentMethod, items, couponCode } = req.body;
 
     if (
       !customerName ||
@@ -139,43 +149,159 @@ const placeOrder = async (req, res) => {
       });
     }
 
-    let totalAmount = 0;
+    // 1. Extract product IDs and validate quantities
+    const productIds = [];
+    for (const item of items) {
+      if (!item.productId || item.quantity == null) {
+        return res.status(400).json({
+          success: false,
+          message: "Each item needs productId and quantity",
+        });
+      }
+      const numQty = Number(item.quantity);
+      if (isNaN(numQty) || numQty < 1) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid quantity specified for item: ${item.productId}`,
+        });
+      }
+      productIds.push(item.productId.toString());
+    }
+
+    // 2. Query database for products
+    const validObjectIds = productIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const dbProducts = await Product.find({
+      $or: [
+        { id: { $in: productIds } },
+        ...(validObjectIds.length > 0 ? [{ _id: { $in: validObjectIds } }] : []),
+      ],
+    });
+
+    const productMap = new Map();
+    for (const p of dbProducts) {
+      if (p.id) productMap.set(p.id.toString(), p);
+      if (p._id) productMap.set(p._id.toString(), p);
+    }
+
+    // 3. Server-side price validation: Calculate totalAmount strictly using dbProduct.price
+    let subtotal = 0;
+    const verifiedItems = [];
 
     for (const item of items) {
-      if (!item.productId || !item.name || item.price == null || item.quantity == null) {
+      const pid = item.productId.toString();
+      const dbProduct = productMap.get(pid);
+
+      if (!dbProduct) {
         return res.status(400).json({
           success: false,
-          message: "Each item needs productId, name, price and quantity",
+          message: `Product not found: ${item.productId}`,
         });
       }
-      const numPrice = Number(item.price);
+
       const numQty = Number(item.quantity);
-      if (isNaN(numPrice) || isNaN(numQty) || numPrice < 0 || numQty < 1) {
+      const itemPrice = dbProduct.price;
+
+      if (typeof itemPrice !== "number" || isNaN(itemPrice) || itemPrice < 0) {
         return res.status(400).json({
           success: false,
-          message: "Invalid price or quantity specified for item",
+          message: `Invalid price in database for product: ${item.productId}`,
         });
       }
-      totalAmount += numPrice * numQty;
+
+      subtotal += itemPrice * numQty;
+
+      verifiedItems.push({
+        productId: dbProduct.id || pid,
+        name: item.name || dbProduct.name || "Jewellery Item",
+        image: item.image || (dbProduct.images && dbProduct.images[0]) || "",
+        price: itemPrice,
+        quantity: numQty,
+      });
     }
 
-    const subtotal = totalAmount;
+    // 4. Strict coupon validation
     let finalDiscount = 0;
     let appliedCoupon = "";
+    let appliedOfferId = null;
 
-    if (req.body.couponCode) {
-      const Offer = require("../models/Offer");
-      const code = req.body.couponCode.trim().toUpperCase();
-      const offer = await Offer.findOne({ code, isActive: true });
-      if (offer && !offer.isExpired() && subtotal >= offer.minOrderAmount) {
-        finalDiscount = offer.calculateDiscount(subtotal);
-        appliedCoupon = code;
-        // Increment usage count
-        await Offer.updateOne({ _id: offer._id }, { $inc: { usedCount: 1 } });
+    if (couponCode && typeof couponCode === "string" && couponCode.trim() !== "") {
+      const code = couponCode.trim().toUpperCase();
+      const offer = await Offer.findOne({ code });
+
+      if (!offer) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' not found in the directory`,
+        });
       }
+
+      if (!offer.isActive) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' is no longer active`,
+        });
+      }
+
+      const now = new Date();
+
+      if (offer.isExpired() || now > offer.expiryDate) {
+        return res.status(400).json({
+          success: false,
+          isExpired: true,
+          message: `Coupon code '${code}' has expired`,
+        });
+      }
+
+      if (now < offer.startDate) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' is not active yet`,
+        });
+      }
+
+      if (offer.usageLimit > 0 && offer.usedCount >= offer.usageLimit) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' has reached its maximum client usage limit`,
+        });
+      }
+
+      if (subtotal < offer.minOrderAmount) {
+        return res.status(400).json({
+          success: false,
+          minOrderAmount: offer.minOrderAmount,
+          message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
+        });
+      }
+
+      if (
+        offer.applicableCategory &&
+        offer.applicableCategory.toLowerCase() !== "all"
+      ) {
+        const matchesCategory = items.some((item) => {
+          const dbProduct = productMap.get(item.productId.toString());
+          const cat = (dbProduct && dbProduct.category) || item.category;
+          return (
+            cat &&
+            cat.toLowerCase() === offer.applicableCategory.toLowerCase()
+          );
+        });
+
+        if (!matchesCategory) {
+          return res.status(400).json({
+            success: false,
+            applicableCategory: offer.applicableCategory,
+            message: `Coupon code '${code}' is only applicable to ${offer.applicableCategory} collections`,
+          });
+        }
+      }
+
+      finalDiscount = offer.calculateDiscount(subtotal);
+      appliedCoupon = code;
+      appliedOfferId = offer._id;
     }
 
-    const finalPayable = Math.max(0, subtotal - finalDiscount);
+    const totalAmount = Math.max(0, subtotal - finalDiscount);
 
     const placedDate = new Date();
     const trackingNumber = "ZWR-" + Math.floor(100000 + Math.random() * 900000);
@@ -187,11 +313,11 @@ const placeOrder = async (req, res) => {
       phone,
       address,
       paymentMethod: paymentMethod || "Cash on Delivery",
-      items,
+      items: verifiedItems,
       subtotal,
       discountAmount: finalDiscount,
       couponCode: appliedCoupon,
-      totalAmount: finalPayable,
+      totalAmount,
       status: "Order Placed",
       trackingNumber,
       courierPartner: "Sequel Secure Luxury Logistics",
@@ -200,6 +326,14 @@ const placeOrder = async (req, res) => {
       aiDeliveryInsight: AI_INSIGHTS["Order Placed"],
       timeline: initialTimeline,
     });
+
+    // 5. Increment coupon usage count after order is confirmed created
+    if (appliedOfferId) {
+      await Offer.updateOne({ _id: appliedOfferId }, { $inc: { usedCount: 1 } });
+    }
+
+    // 6. Clear cart upon successful order creation
+    await Cart.findOneAndUpdate({ userId }, { $set: { items: [] } });
 
     return res.status(201).json({
       success: true,
@@ -348,6 +482,13 @@ const getOrderTracking = async (req, res) => {
 
 const updateOrderStatus = async (req, res) => {
   try {
+    if (req.user && req.user.role && req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only administrators can update order status",
+      });
+    }
+
     const orderId = req.params.id;
     const { status } = req.body;
 

@@ -18,6 +18,7 @@ class OffersScreen extends StatefulWidget {
 
 class _OffersScreenState extends State<OffersScreen> {
   bool isLoading = true;
+  String errorMessage = "";
   List<OfferModel> offers = [];
   List<Product> discountedProducts = [];
   String selectedFilter = "All"; // "All", "Coupons", "Discounted Pieces", "Calculator"
@@ -60,6 +61,7 @@ class _OffersScreenState extends State<OffersScreen> {
   Future<void> loadOffersData() async {
     setState(() {
       isLoading = true;
+      errorMessage = "";
     });
 
     try {
@@ -67,6 +69,16 @@ class _OffersScreenState extends State<OffersScreen> {
       final productsRes = await ApiService.getDiscountedProducts();
 
       if (!mounted) return;
+
+      if (offersRes["success"] != true && productsRes["success"] != true) {
+        setState(() {
+          isLoading = false;
+          errorMessage = offersRes["message"]?.toString() ??
+              productsRes["message"]?.toString() ??
+              "Unable to load promotional offers";
+        });
+        return;
+      }
 
       List<OfferModel> loadedOffers = [];
       if (offersRes["success"] == true && offersRes["offers"] is List) {
@@ -86,11 +98,13 @@ class _OffersScreenState extends State<OffersScreen> {
         offers = loadedOffers;
         discountedProducts = loadedProducts;
         isLoading = false;
+        errorMessage = "";
       });
     } catch (_) {
       if (mounted) {
         setState(() {
           isLoading = false;
+          errorMessage = "Unable to connect to Maison Vault server";
         });
       }
     }
@@ -198,7 +212,9 @@ class _OffersScreenState extends State<OffersScreen> {
                   ],
                 ),
               )
-            : CustomScrollView(
+            : errorMessage.isNotEmpty
+                ? buildErrorView(isDark)
+                : CustomScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 slivers: [
                   SliverToBoxAdapter(
@@ -287,21 +303,27 @@ class _OffersScreenState extends State<OffersScreen> {
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       elevation: 0,
       centerTitle: true,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
-              color: isDark ? const Color(0xFF18181D) : Colors.white,
-            ),
-            child: const Icon(Icons.arrow_back_ios_new, size: 16),
-          ),
-        ),
-      ),
+      leading: Navigator.canPop(context)
+          ? Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+                    color: isDark ? const Color(0xFF18181D) : Colors.white,
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new, size: 16),
+                ),
+              ),
+            )
+          : null,
       title: Column(
         children: [
           Text(
@@ -488,7 +510,7 @@ class _OffersScreenState extends State<OffersScreen> {
                       copyCouponCode("ROYAL20");
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const CartScreen()),
+                        MaterialPageRoute(builder: (_) => const CartScreen(couponCode: "ROYAL20")),
                       );
                     },
                     child: Text(
@@ -780,7 +802,7 @@ class _OffersScreenState extends State<OffersScreen> {
                           copyCouponCode(offer.code);
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const CartScreen()),
+                            MaterialPageRoute(builder: (_) => CartScreen(couponCode: offer.code)),
                           );
                         },
                   child: Text(
@@ -846,9 +868,12 @@ class _OffersScreenState extends State<OffersScreen> {
                         color: isDark ? const Color(0xFF1C1C22) : const Color(0xFFF7F5F0),
                         image: DecorationImage(
                           image: AssetImage(
-                            product.images.isNotEmpty ? product.images.first : "assets/images/ring.png",
+                            Product.normalizeAssetPath(
+                              product.images.isNotEmpty ? product.images.first : "assets/images/ring.png",
+                            ),
                           ),
                           fit: BoxFit.cover,
+                          onError: (exception, stackTrace) {},
                         ),
                       ),
                     ),
@@ -1137,6 +1162,56 @@ class _OffersScreenState extends State<OffersScreen> {
           ),
         );
       },
+    );
+  }
+
+  Widget buildErrorView(bool isDark) {
+    return Center(
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.red.withValues(alpha: 0.1),
+                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
+              ),
+              child: const Icon(Icons.cloud_off_rounded, size: 48, color: Colors.redAccent),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              "Privilege Vault Connection Error",
+              textAlign: TextAlign.center,
+              style: AppFonts.cinzel(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              errorMessage,
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(160, 44),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: loadOffersData,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: Text(
+                "RETRY",
+                style: AppFonts.poppins(fontWeight: FontWeight.bold, letterSpacing: 1.1),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -44,7 +44,7 @@ async function runTests() {
       {
         productId: "prod_ring_01",
         name: "Solitaire Diamond Ring",
-        image: "assets/images/ring1.jpg",
+        image: "assets/images/ring1.png",
         price: 185000,
         quantity: 1,
       },

@@ -14,6 +14,7 @@ class OrdersScreen extends StatefulWidget {
 
 class _OrdersScreenState extends State<OrdersScreen> {
   bool isLoading = true;
+  String errorMessage = "";
   List<Map<String, dynamic>> orders = [];
   final TextEditingController searchController = TextEditingController();
   String searchQuery = "";
@@ -39,21 +40,35 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Future<void> loadOrders() async {
     setState(() {
       isLoading = true;
+      errorMessage = "";
     });
 
-    final result = await ApiService.getOrders();
+    try {
+      final result = await ApiService.getOrders();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    if (result["success"] == true) {
-      final List orderList = (result["orders"] ?? []) as List;
+      if (result["success"] == true) {
+        final List orderList = (result["orders"] ?? []) as List;
+        setState(() {
+          orders = orderList
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+          isLoading = false;
+          errorMessage = "";
+        });
+      } else {
+        setState(() {
+          isLoading = false;
+          errorMessage = result["message"]?.toString() ?? "Failed to load orders";
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
       setState(() {
-        orders = orderList.cast<Map<String, dynamic>>().toList();
         isLoading = false;
-      });
-    } else {
-      setState(() {
-        isLoading = false;
+        errorMessage = "Unable to connect to Maison Vault server";
       });
     }
   }
@@ -184,14 +199,18 @@ class _OrdersScreenState extends State<OrdersScreen> {
                       ),
                     ),
                   )
-                : orders.isEmpty
+                : errorMessage.isNotEmpty
                     ? SliverFillRemaining(
-                        child: buildEmptyView(isDark),
+                        child: buildErrorView(isDark),
                       )
-                    : filteredOrders.isEmpty
+                    : orders.isEmpty
                         ? SliverFillRemaining(
-                            child: buildNoSearchResultsView(isDark),
+                            child: buildEmptyView(isDark),
                           )
+                        : filteredOrders.isEmpty
+                            ? SliverFillRemaining(
+                                child: buildNoSearchResultsView(isDark),
+                              )
                         : SliverPadding(
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                             sliver: SliverList(
@@ -220,21 +239,27 @@ class _OrdersScreenState extends State<OrdersScreen> {
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       elevation: 0,
       centerTitle: true,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
-              color: isDark ? const Color(0xFF18181D) : Colors.white,
-            ),
-            child: const Icon(Icons.arrow_back_ios_new, size: 16),
-          ),
-        ),
-      ),
+      leading: Navigator.canPop(context)
+          ? Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+                    color: isDark ? const Color(0xFF18181D) : Colors.white,
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new, size: 16),
+                ),
+              ),
+            )
+          : null,
       title: Column(
         children: [
           Text(
@@ -813,7 +838,17 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 minimumSize: const Size(200, 48),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
-              onPressed: () => Navigator.pop(context),
+              onPressed: () {
+                if (Navigator.canPop(context)) {
+                  Navigator.pop(context);
+                } else {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    "/bottomNav",
+                    (route) => false,
+                  );
+                }
+              },
               icon: const Icon(Icons.explore_outlined, size: 18),
               label: Text(
                 "EXPLORE CATALOG",
@@ -861,6 +896,41 @@ class _OrdersScreenState extends State<OrdersScreen> {
               },
               icon: const Icon(Icons.location_searching_rounded, size: 16),
               label: Text("Track '$searchQuery' Directly"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildErrorView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 54, color: Colors.redAccent),
+            const SizedBox(height: 16),
+            Text(
+              "Unable to Load Acquisitions",
+              style: AppFonts.cinzel(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              errorMessage,
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: loadOrders,
+              child: const Text("RETRY CONNECTION"),
             ),
           ],
         ),

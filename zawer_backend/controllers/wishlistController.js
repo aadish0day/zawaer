@@ -1,10 +1,11 @@
 const Wishlist = require("../models/Wishlist");
+const Product = require("../models/Product");
 
 const getWishlist = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    let wishlist = await Wishlist.findOne({ userId });
+    let wishlist = await Wishlist.findOne({ userId }).populate({ path: "items.product", model: "Product" });
 
     if (!wishlist) {
       wishlist = await Wishlist.create({ userId, items: [] });
@@ -34,24 +35,21 @@ const addToWishlist = async (req, res) => {
       });
     }
 
-    let wishlist = await Wishlist.findOne({ userId });
+    const prodIdStr = productId.toString();
+    const existing = await Wishlist.findOne({
+      userId,
+      "items.productId": prodIdStr,
+    });
 
-    if (!wishlist) {
-      wishlist = new Wishlist({ userId, items: [] });
-    }
-
-    const exists = wishlist.items.some(
-      (item) => item.productId.toString() === productId.toString()
+    const wishlist = await Wishlist.findOneAndUpdate(
+      { userId },
+      { $addToSet: { items: { productId: prodIdStr } } },
+      { returnDocument: "after", upsert: true, setDefaultsOnInsert: true }
     );
-
-    if (!exists) {
-      wishlist.items.push({ productId: productId.toString() });
-      await wishlist.save();
-    }
 
     return res.status(200).json({
       success: true,
-      message: exists
+      message: existing
         ? "Product already in wishlist"
         : "Product added to wishlist",
       wishlist,
@@ -69,7 +67,12 @@ const removeFromWishlist = async (req, res) => {
     const productId = req.params.productId;
     const userId = req.user.id;
 
-    const wishlist = await Wishlist.findOne({ userId });
+    const prodIdStr = productId.toString();
+    const wishlist = await Wishlist.findOneAndUpdate(
+      { userId },
+      { $pull: { items: { productId: prodIdStr } } },
+      { returnDocument: "after" }
+    );
 
     if (!wishlist) {
       return res.status(404).json({
@@ -77,12 +80,6 @@ const removeFromWishlist = async (req, res) => {
         message: "Wishlist not found",
       });
     }
-
-    wishlist.items = wishlist.items.filter(
-      (item) => item.productId.toString() !== productId.toString()
-    );
-
-    await wishlist.save();
 
     return res.status(200).json({
       success: true,

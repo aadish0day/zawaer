@@ -178,6 +178,11 @@ class WishlistScreenState extends State<WishlistScreen> {
     if (!mounted) return;
 
     if (result["success"] == true) {
+      await ApiService.removeFromWishlist(item["productId"].toString());
+      if (!mounted) return;
+      await loadWishlist();
+      if (!mounted) return;
+
       messenger.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -237,13 +242,22 @@ class WishlistScreenState extends State<WishlistScreen> {
     final messenger = ScaffoldMessenger.of(context);
 
     int successCount = 0;
-    for (final item in wishlist) {
+    final itemsToMove = List<Map<String, dynamic>>.from(wishlist);
+    for (final item in itemsToMove) {
+      final productId = item["productId"].toString();
       final res = await ApiService.addToCart(
-        productId: item["productId"].toString(),
+        productId: productId,
         quantity: 1,
       );
-      if (res["success"] == true) successCount++;
+      if (res["success"] == true) {
+        successCount++;
+        await ApiService.removeFromWishlist(productId);
+      }
     }
+
+    if (!mounted) return;
+
+    await loadWishlist();
 
     if (!mounted) return;
 
@@ -363,21 +377,27 @@ class WishlistScreenState extends State<WishlistScreen> {
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       elevation: 0,
       centerTitle: true,
-      leading: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.pop(context),
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
-              color: isDark ? const Color(0xFF18181D) : Colors.white,
-            ),
-            child: const Icon(Icons.arrow_back_ios_new, size: 16),
-          ),
-        ),
-      ),
+      leading: Navigator.canPop(context)
+          ? Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () {
+                  if (Navigator.canPop(context)) {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.gold.withValues(alpha: 0.3), width: 0.8),
+                    color: isDark ? const Color(0xFF18181D) : Colors.white,
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new, size: 16),
+                ),
+              ),
+            )
+          : null,
       title: Column(
         children: [
           Text(
@@ -914,7 +934,15 @@ class WishlistScreenState extends State<WishlistScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: () {
-                Navigator.pop(context);
+                if (Navigator.canPop(context)) {
+                  Navigator.pop(context);
+                } else {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    "/bottomNav",
+                    (route) => false,
+                  );
+                }
               },
               icon: const Icon(Icons.explore_outlined, size: 18),
               label: Text(

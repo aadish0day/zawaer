@@ -110,12 +110,14 @@ class OrderTrackingModel {
 
     final rawItems = (json["items"] as List?) ?? [];
     final itemsList = rawItems
-        .map((item) => OrderItemModel.fromJson(item as Map<String, dynamic>))
+        .whereType<Map>()
+        .map((e) => OrderItemModel.fromJson(Map<String, dynamic>.from(e)))
         .toList();
 
     final rawTimeline = (json["timeline"] as List?) ?? [];
     final timelineList = rawTimeline
-        .map((step) => TrackingStep.fromJson(step as Map<String, dynamic>))
+        .whereType<Map>()
+        .map((e) => TrackingStep.fromJson(Map<String, dynamic>.from(e)))
         .toList();
 
     return OrderTrackingModel(

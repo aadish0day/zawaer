@@ -129,6 +129,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> toggleWishlist(Product product) async {
+    final token = await ApiService.getToken();
+    if (token.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFF1E1E24),
+          content: Text(
+            "Please sign in to manage your wishlist",
+            style: AppFonts.poppins(fontSize: 12.5, color: Colors.white),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     HapticFeedback.lightImpact();
     final isWishlisted = wishlistedIds.contains(product.id);
 
@@ -140,10 +157,30 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    if (isWishlisted) {
-      await ApiService.removeFromWishlist(product.id);
-    } else {
-      await ApiService.addToWishlist(product.id);
+    final res = isWishlisted
+        ? await ApiService.removeFromWishlist(product.id)
+        : await ApiService.addToWishlist(product.id);
+
+    if (res["success"] != true) {
+      if (!mounted) return;
+      setState(() {
+        if (isWishlisted) {
+          wishlistedIds.add(product.id);
+        } else {
+          wishlistedIds.remove(product.id);
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.redAccent,
+          content: Text(
+            res["message"]?.toString() ?? "Failed to update wishlist",
+            style: AppFonts.poppins(fontSize: 12.5, color: Colors.white),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -746,11 +783,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: isDark ? const Color(0xFF1C1C22) : const Color(0xFFF7F5F0),
                         image: DecorationImage(
                           image: AssetImage(
-                            product.images.isNotEmpty
-                                ? product.images.first
-                                : "assets/images/ring.png",
+                            Product.normalizeAssetPath(
+                              product.images.isNotEmpty
+                                  ? product.images.first
+                                  : "assets/images/ring.png",
+                            ),
                           ),
                           fit: BoxFit.cover,
+                          onError: (exception, stackTrace) {},
                         ),
                       ),
                     ),

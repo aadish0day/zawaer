@@ -74,6 +74,10 @@ class _ForgotPasswordScreenState
         otpSent = true;
       });
 
+      final String otpMessage = result["devOtp"] != null
+          ? "OTP sent (Dev code: ${result["devOtp"]})"
+          : (result["message"]?.toString() ?? "OTP sent to your email");
+
       ScaffoldMessenger.of(context).showSnackBar(
 
         SnackBar(
@@ -81,7 +85,7 @@ class _ForgotPasswordScreenState
           backgroundColor: Colors.green,
 
           content: Text(
-            "OTP sent: ${result["otp"]}",
+            otpMessage,
           ),
 
         ),

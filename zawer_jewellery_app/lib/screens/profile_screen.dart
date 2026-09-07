@@ -166,6 +166,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           if (!dialogContext.mounted) return;
                           Navigator.pop(dialogContext);
 
+                          if (!mounted) return;
+
                           if (result["success"] == true) {
                             loadUserData();
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -192,7 +194,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           },
         );
       },
-    );
+    ).then((_) {
+      nameController.dispose();
+      phoneController.dispose();
+    });
   }
 
   // =====================================================
@@ -243,12 +248,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 await prefs.setString("savedAddress", addressController.text.trim());
 
                 if (!dialogContext.mounted) return;
+                Navigator.pop(dialogContext);
+
+                if (!mounted) return;
 
                 setState(() {
                   userAddress = addressController.text.trim();
                 });
 
-                Navigator.pop(dialogContext);
                 messenger.showSnackBar(
                   const SnackBar(
                     behavior: SnackBarBehavior.floating,
@@ -264,7 +271,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         );
       },
-    );
+    ).then((_) {
+      addressController.dispose();
+    });
   }
 
   // =====================================================
@@ -272,7 +281,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // =====================================================
   Future<void> logoutUser() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    await prefs.remove("token");
+    await prefs.remove("userId");
+    await prefs.remove("userName");
+    await prefs.remove("userEmail");
+    await prefs.remove("userPhone");
 
     if (!mounted) return;
 
@@ -314,6 +327,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               onPressed: () async {
                 Navigator.pop(dialogContext);
+                if (!mounted) return;
                 await logoutUser();
               },
               child: Text(
@@ -966,6 +980,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 final query = trackController.text.trim();
                 if (query.isNotEmpty) {
                   Navigator.pop(ctx);
+                  if (!mounted) return;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -982,7 +997,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         );
       },
-    );
+    ).then((_) {
+      trackController.dispose();
+    });
   }
 
   void showConciergeModal() {

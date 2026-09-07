@@ -31,6 +31,26 @@ class Product {
 
   double get savingsAmount => hasDiscount ? (originalPrice - price) : 0.0;
 
+  static String normalizeAssetPath(String path) {
+    if (path.isEmpty) return "assets/images/ring.png";
+    if (path.contains("ring") && path.endsWith(".jpg") && !path.contains("earing")) {
+      return path.replaceAll(".jpg", ".png");
+    }
+    if (path.contains("chain") && path.endsWith(".jpg")) {
+      return path.replaceAll(".jpg", ".png");
+    }
+    if (path.contains("bracelet") && path.endsWith(".jpg")) {
+      return path.replaceAll(".jpg", ".png");
+    }
+    if (path.contains("earing") && path.endsWith(".png")) {
+      return path.replaceAll(".png", ".jpg");
+    }
+    if (path.contains("necklace") && path.endsWith(".png")) {
+      return path.replaceAll(".png", ".jpg");
+    }
+    return path;
+  }
+
   factory Product.fromJson(Map<String, dynamic> json) {
     final double priceVal = (json["price"] as num?)?.toDouble() ?? 0.0;
     final double origPriceVal =
@@ -50,7 +70,10 @@ class Product {
       offerTag: json["offerTag"]?.toString() ?? "",
       rating: (json["rating"] as num?)?.toDouble() ?? 0.0,
       images: json["images"] is List
-          ? List<String>.from((json["images"] as List).map((image) => image.toString()))
+          ? List<String>.from(
+              (json["images"] as List)
+                  .map((image) => normalizeAssetPath(image.toString())),
+            )
           : [],
       isFavourite: json["isFavourite"] == true,
     );

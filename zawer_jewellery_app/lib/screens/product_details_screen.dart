@@ -1,9 +1,10 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../utils/text_styles.dart';
 
 import '../models/product_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import 'login_screen.dart';
 
 class ProductDetailsScreen extends StatefulWidget {
   final Product product;
@@ -43,6 +44,83 @@ bool isSubmittingReview = false;
 void initState() {
   super.initState();
   fetchReviews();
+  checkWishlistStatus();
+}
+
+Future<void> checkWishlistStatus() async {
+  final token = await ApiService.getToken();
+  if (token.isEmpty) return;
+
+  try {
+    final wishResult = await ApiService.getWishlist();
+    if (!mounted) return;
+    if (wishResult["success"] == true) {
+      final dynamic rawWish = wishResult["wishlist"];
+      final List items = (rawWish?["items"] ?? []) as List;
+      final bool exists = items.any(
+        (item) => item["productId"]?.toString() == widget.product.id,
+      );
+      setState(() {
+        isFavourite = exists;
+      });
+    }
+  } catch (_) {}
+}
+
+void showLoginPromptDialog(String action) {
+  showDialog(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.lock_outline, color: AppColors.gold, size: 26),
+            const SizedBox(width: 10),
+            Text(
+              "Sign In Required",
+              style: AppFonts.cinzel(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "Please sign in to your ZAWER account to $action and access your private vault.",
+          style: AppFonts.poppins(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text("Cancel", style: AppFonts.poppins(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              ).then((_) => checkWishlistStatus());
+            },
+            child: Text(
+              "Sign In",
+              style: AppFonts.poppins(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 // =====================================================
@@ -237,7 +315,9 @@ void showReviewDialog() {
         },
       );
     },
-  );
+  ).then((_) {
+    commentController.dispose();
+  });
 }
 
 //==========================
@@ -245,6 +325,11 @@ void showReviewDialog() {
 //==========================
 
 Future<void> toggleFavourite() async {
+final token = await ApiService.getToken();
+if (token.isEmpty) {
+  showLoginPromptDialog("save items to your wishlist");
+  return;
+}
 
 final result = isFavourite
 ? await ApiService.removeFromWishlist(widget.product.id)
@@ -276,6 +361,11 @@ result["message"]?.toString() ??
 //==========================
 
 Future<bool> addProductToCart() async {
+final token = await ApiService.getToken();
+if (token.isEmpty) {
+  showLoginPromptDialog("add items to your cart");
+  return false;
+}
 
 setState(() {
 isAddingToCart = true;
@@ -390,7 +480,7 @@ padding: const EdgeInsets.all(20),
 
 child: Hero(
 
-tag: product.id,
+tag: index == 0 ? product.id : "${product.id}_$index",
 
 child: Image.asset(
 product.images[index],
@@ -780,10 +870,17 @@ height: 55,
 child: OutlinedButton.icon(
 
 onPressed: () async {
-
 final navigator = Navigator.of(context);
+final token = await ApiService.getToken();
+if (!mounted) return;
+if (token.isEmpty) {
+  showLoginPromptDialog("proceed to checkout");
+  return;
+}
 
 final added = await addProductToCart();
+
+if (!mounted) return;
 
 if (added) {
 navigator.pushNamed(

@@ -93,9 +93,6 @@ const orderSchema = new mongoose.Schema(
 
     subtotal: {
       type: Number,
-      default: function () {
-        return this.totalAmount;
-      },
     },
 
     discountAmount: {
@@ -170,5 +167,21 @@ const orderSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+orderSchema.index({ trackingNumber: 1 }, { unique: true });
+orderSchema.index({ userId: 1 });
+
+orderSchema.pre("validate", function () {
+  if (this.subtotal == null) {
+    if (this.totalAmount != null) {
+      this.subtotal = this.totalAmount;
+    } else if (Array.isArray(this.items) && this.items.length > 0) {
+      this.subtotal = this.items.reduce(
+        (sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1),
+        0
+      );
+    }
+  }
+});
 
 module.exports = mongoose.model("Order", orderSchema);
