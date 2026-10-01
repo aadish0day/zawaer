@@ -14,14 +14,15 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
   String selectedCategory = "All";
   bool isLoadingProducts = true;
   List<Product> apiProducts = [];
   Set<String> wishlistedIds = {};
+  final Set<String> _togglingWishlistIds = {};
   final TextEditingController searchController = TextEditingController();
   final PageController _heroPageController = PageController();
   int _currentHeroPage = 0;
@@ -115,7 +116,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> loadWishlistState() async {
     final result = await ApiService.getWishlist();
-    if (!mounted || result["success"] != true) return;
+    if (!mounted) return;
+    if (result["statusCode"] == 401) {
+      // Signed out: clear stale hearts.
+      setState(() => wishlistedIds = {});
+      return;
+    }
+    if (result["success"] != true) return;
 
     final dynamic rawWish = result["wishlist"];
     final List items = (rawWish?["items"] ?? []) as List;
@@ -146,6 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (!_togglingWishlistIds.add(product.id)) return;
     HapticFeedback.lightImpact();
     final isWishlisted = wishlistedIds.contains(product.id);
 
@@ -160,6 +168,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final res = isWishlisted
         ? await ApiService.removeFromWishlist(product.id)
         : await ApiService.addToWishlist(product.id);
+    _togglingWishlistIds.remove(product.id);
 
     if (res["success"] != true) {
       if (!mounted) return;

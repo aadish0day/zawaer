@@ -111,4 +111,30 @@ app.use(
   offerRoutes
 );
 
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+  });
+});
+
+// Final error handler: JSON only, never a stack trace.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  // Body-parser errors (malformed JSON, too large, ...) carry a 4xx status
+  const status = err.status >= 400 && err.status < 500 ? err.status : 500;
+  if (status === 500) console.error("Unhandled Error:", err);
+
+  res.status(status).json({
+    success: false,
+    message:
+      err.type === "entity.parse.failed"
+        ? "Malformed JSON body"
+        : status === 500
+          ? "Internal server error"
+          : "Invalid request",
+  });
+});
+
 module.exports = app;

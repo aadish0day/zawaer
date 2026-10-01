@@ -327,8 +327,21 @@ void showReviewDialog() {
 // Wishlist Toggle
 //==========================
 
+bool isTogglingFavourite = false;
+
 Future<void> toggleFavourite() async {
+if (isTogglingFavourite) return;
+isTogglingFavourite = true;
+try {
+  await _toggleFavourite();
+} finally {
+  isTogglingFavourite = false;
+}
+}
+
+Future<void> _toggleFavourite() async {
 final token = await ApiService.getToken();
+if (!mounted) return;
 if (token.isEmpty) {
   showLoginPromptDialog("save items to your wishlist");
   return;
@@ -365,6 +378,7 @@ result["message"]?.toString() ??
 
 Future<bool> addProductToCart() async {
 final token = await ApiService.getToken();
+if (!mounted) return false;
 if (token.isEmpty) {
   showLoginPromptDialog("add items to your cart");
   return false;
@@ -601,7 +615,7 @@ size: 20,
 const SizedBox(width: 5),
 
 Text(
-product.rating.toString(),
+(totalReviews > 0 ? averageRating : product.rating).toStringAsFixed(1),
 style: AppFonts.poppins(
 fontWeight: FontWeight.w600,
 fontSize: 16,
@@ -611,7 +625,11 @@ fontSize: 16,
 const SizedBox(width: 8),
 
 Text(
-"(250+ Reviews)",
+isLoadingReviews
+? ""
+: totalReviews > 0
+? "($totalReviews ${totalReviews == 1 ? "Review" : "Reviews"})"
+: "(No reviews yet)",
 style: AppFonts.poppins(
 color: Theme.of(context).colorScheme.onSurfaceVariant,
 ),
@@ -1361,7 +1379,7 @@ Widget _buildReviewItem(Map<String, dynamic> review) {
 
 String _formatDate(String dateString) {
   try {
-    final date = DateTime.parse(dateString);
+    final date = DateTime.parse(dateString).toLocal();
     final now = DateTime.now();
     final difference = now.difference(date);
 

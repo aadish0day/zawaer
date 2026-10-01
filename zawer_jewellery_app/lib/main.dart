@@ -11,7 +11,6 @@ import 'screens/profile_screen.dart';
 import 'screens/checkout_screen.dart';
 import 'screens/bottom_nav_screen.dart';
 import 'screens/orders_screen.dart';
-import 'screens/product_api_test_screen.dart';
 
 import 'utils/theme.dart';
 import 'utils/theme_controller.dart';
@@ -133,13 +132,6 @@ class ZawerJewelleryApp extends StatelessWidget {
 
         "/orders": (context) =>
         const OrdersScreen(),
-
-        // ==========================
-        // TEMPORARY PRODUCT API TEST
-        // ==========================
-
-        "/productApiTest": (context) =>
-        const ProductApiTestScreen(),
           },
         );
       },

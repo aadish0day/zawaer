@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -103,6 +103,12 @@ class ApiService {
     const envUrl = String.fromEnvironment("API_BASE_URL");
     if (envUrl.isNotEmpty) {
       return envUrl;
+    }
+    // Release builds block cleartext HTTP, so the dev fallbacks below can't work there
+    if (kReleaseMode) {
+      throw StateError(
+        "Release builds need --dart-define=API_BASE_URL=https://your-server",
+      );
     }
     if (kIsWeb) {
       return "http://localhost:5000";

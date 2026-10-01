@@ -25,6 +25,7 @@ exports.getAllOffers = async (req, res) => {
       const isValid =
         offer.isActive &&
         !isExpired &&
+        !(offer.startDate && now < offer.startDate) &&
         (offer.usageLimit === 0 || offer.usedCount < offer.usageLimit);
 
       return {

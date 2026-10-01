@@ -85,6 +85,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       addressController.text = prefs.getString("savedAddress") ?? "";
     }
 
+    if (!mounted) return;
+
     if (widget.buyNowItems != null) {
       setState(() {
         cartItems = widget.buyNowItems!;
@@ -108,40 +110,22 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final dynamic rawCart = cartResult["cart"];
       final List items = (rawCart?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, dynamic> productMap = {};
-
-      if (!mounted) return;
-
-      if (productResult["success"] != true) {
-        setState(() {
-          loadError = productResult["message"]?.toString() ?? "Unable to load vault pieces";
-          isLoading = false;
-        });
-        return;
-      }
-
-      final List productList = (productResult["products"] ?? []) as List;
-      for (final p in productList) {
-        final map = p as Map<String, dynamic>;
-        productMap[map["id"]?.toString() ?? ""] = map;
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
       for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
+        // Backend populates items[].product; null means the product was deleted.
+        final product = item["product"];
+        if (product is! Map<String, dynamic>) continue;
+        final List images = product["images"] is List ? product["images"] as List : const [];
 
         joined.add({
-          "productId": productId,
+          "productId": item["productId"]?.toString() ?? product["id"]?.toString() ?? "",
           "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
-          "name": product?["name"]?.toString() ?? "Handcrafted Jewellery Piece",
-          "price": (product?["price"] as num?)?.toDouble() ?? 0.0,
-          "category": product?["category"]?.toString() ?? "Jewellery",
-          "image": (product?["images"] as List?) is List &&
-                  ((product?["images"] as List).isNotEmpty)
-              ? (product!["images"] as List).first.toString()
+          "name": product["name"]?.toString() ?? "",
+          "price": (product["price"] as num?)?.toDouble() ?? 0.0,
+          "category": product["category"]?.toString() ?? "Jewellery",
+          "image": images.isNotEmpty
+              ? images.first.toString()
               : "assets/images/ring.png",
         });
       }

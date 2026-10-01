@@ -38,6 +38,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
   // LOAD ORDERS FROM BACKEND (MongoDB)
   // =====================================================
   Future<void> loadOrders() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       errorMessage = "";
@@ -940,7 +942,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   String _formatDate(String isoDate) {
     try {
-      final date = DateTime.parse(isoDate);
+      final date = DateTime.parse(isoDate).toLocal();
       return "${date.day.toString().padLeft(2, '0')}/"
           "${date.month.toString().padLeft(2, '0')}/"
           "${date.year}";

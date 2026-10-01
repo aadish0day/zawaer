@@ -1,15 +1,27 @@
 const Wishlist = require("../models/Wishlist");
 const Product = require("../models/Product");
 
+// Concurrent upserts on the unique userId can lose with E11000; the retry sees the winner's doc.
+const retryOnDuplicate = async (fn) => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    return fn();
+  }
+};
+
 const getWishlist = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    let wishlist = await Wishlist.findOne({ userId }).populate({ path: "items.product", model: "Product" });
-
-    if (!wishlist) {
-      wishlist = await Wishlist.create({ userId, items: [] });
-    }
+    const wishlist = await retryOnDuplicate(() =>
+      Wishlist.findOneAndUpdate(
+        { userId },
+        { $setOnInsert: { items: [] } },
+        { returnDocument: "after", upsert: true }
+      ).populate({ path: "items.product", select: "-reviews" })
+    );
 
     return res.status(200).json({
       success: true,
@@ -35,16 +47,26 @@ const addToWishlist = async (req, res) => {
       });
     }
 
-    const prodIdStr = productId.toString();
+    const product = await Product.findByAnyId(productId);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    const prodIdStr = product.id;
     const existing = await Wishlist.findOne({
       userId,
       "items.productId": prodIdStr,
     });
 
-    const wishlist = await Wishlist.findOneAndUpdate(
-      { userId },
-      { $addToSet: { items: { productId: prodIdStr } } },
-      { returnDocument: "after", upsert: true, setDefaultsOnInsert: true }
+    const wishlist = await retryOnDuplicate(() =>
+      Wishlist.findOneAndUpdate(
+        { userId },
+        { $addToSet: { items: { productId: prodIdStr } } },
+        { returnDocument: "after", upsert: true, setDefaultsOnInsert: true }
+      )
     );
 
     return res.status(200).json({

@@ -3,6 +3,7 @@ import '../utils/text_styles.dart';
 
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -302,13 +303,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             return "Please enter your email";
                           }
 
-                          final emailRegex = RegExp(
-                            r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,4}$',
-                          );
-
-                          if (!emailRegex.hasMatch(
-                            value.trim(),
-                          )) {
+                          if (!isValidEmail(value)) {
                             return "Enter a valid email";
                           }
 

@@ -31,6 +31,8 @@ class WishlistScreenState extends State<WishlistScreen> {
   // LOAD WISHLIST FROM BACKEND (MongoDB)
   // =====================================================
   Future<void> loadWishlist() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
     setState(() {
       isLoading = true;
     });
@@ -60,34 +62,21 @@ class WishlistScreenState extends State<WishlistScreen> {
       final dynamic rawWish = wishResult["wishlist"];
       final List items = (rawWish?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, Product> productMap = {};
-
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final product = Product.fromJson(p as Map<String, dynamic>);
-          productMap[product.id] = product;
-        }
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
       for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
-
-        if (product == null) continue;
+        // Backend populates items[].product; null means the product was deleted.
+        final rawProduct = item["product"];
+        if (rawProduct is! Map<String, dynamic>) continue;
+        final product = Product.fromJson(rawProduct);
 
         joined.add({
-          "productId": productId,
+          "productId": item["productId"]?.toString() ?? product.id,
           "name": product.name,
           "price": product.price,
           "category": product.category,
-          "description": product.description,
-          "rating": product.rating,
           "image": product.images.isNotEmpty ? product.images.first : "assets/images/ring.png",
-          "allImages": product.images,
+          "product": product,
         });
       }
 
@@ -143,9 +132,22 @@ class WishlistScreenState extends State<WishlistScreen> {
   // =====================================================
   // MOVE SINGLE ITEM TO BAG
   // =====================================================
+  // Product ids with a "move to bag" in flight; blocks double taps.
+  final Set<String> movingIds = {};
+
   Future<void> moveToCart(int index) async {
-    HapticFeedback.mediumImpact();
     final item = wishlist[index];
+    final productId = item["productId"].toString();
+    if (isMovingAll || !movingIds.add(productId)) return;
+    try {
+      await _moveToCart(item);
+    } finally {
+      movingIds.remove(productId);
+    }
+  }
+
+  Future<void> _moveToCart(Map<String, dynamic> item) async {
+    HapticFeedback.mediumImpact();
     final messenger = ScaffoldMessenger.of(context);
 
     messenger.showSnackBar(
@@ -564,17 +566,7 @@ class WishlistScreenState extends State<WishlistScreen> {
   // 3. BESPOKE WISHLIST ITEM CARD (Double-Bezel Concentric Architecture)
   // =========================================================================
   Widget buildLuxuryWishlistItem(Map<String, dynamic> item, int index, bool isDark) {
-    final imagesList = (item["allImages"] as List?)?.map((e) => e.toString()).toList() ?? [item["image"].toString()];
-
-    final productObj = Product(
-      id: item["productId"].toString(),
-      name: item["name"].toString(),
-      category: item["category"].toString(),
-      description: item["description"]?.toString() ?? "",
-      price: (item["price"] as num?)?.toDouble() ?? 0.0,
-      rating: (item["rating"] as num?)?.toDouble() ?? 4.8,
-      images: imagesList,
-    );
+    final productObj = item["product"] as Product;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),

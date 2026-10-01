@@ -5,18 +5,27 @@ const { MAX_ITEM_QUANTITY } = require("./orderController");
 const isValidQuantity = (qty) =>
   Number.isInteger(qty) && qty >= 1 && qty <= MAX_ITEM_QUANTITY;
 
+// Concurrent upserts on the unique userId can lose with E11000; the retry sees the winner's doc.
+const retryOnDuplicate = async (fn) => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    return fn();
+  }
+};
+
 const getCart = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id.toString();
 
-    let cart = await Cart.findOne({ userId }).populate({ path: "items.product", model: "Product" });
-
-    if (!cart) {
-      cart = await Cart.create({
-        userId: userId.toString(),
-        items: [],
-      });
-    }
+    const cart = await retryOnDuplicate(() =>
+      Cart.findOneAndUpdate(
+        { userId },
+        { $setOnInsert: { items: [] } },
+        { returnDocument: "after", upsert: true }
+      ).populate({ path: "items.product", select: "-reviews" })
+    );
 
     return res.status(200).json({
       success: true,
@@ -56,44 +65,58 @@ const addToCart = async (req, res) => {
       });
     }
 
-    const prodIdStr = productId.toString();
+    const product = await Product.findByAnyId(productId);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
 
-    // 1. Try to atomically increment quantity if the product is already in the cart (capped)
-    let cart = await Cart.findOneAndUpdate(
-      {
+    const prodIdStr = product.id;
+
+    const cart = await retryOnDuplicate(async () => {
+      // 1. Atomically increment quantity if the product is already in the cart (capped)
+      const updated = await Cart.findOneAndUpdate(
+        {
+          userId,
+          items: {
+            $elemMatch: {
+              productId: prodIdStr,
+              quantity: { $lte: MAX_ITEM_QUANTITY - numQty },
+            },
+          },
+        },
+        { $inc: { "items.$.quantity": numQty } },
+        { returnDocument: "after" }
+      );
+      if (updated) return updated;
+
+      const overCap = await Cart.exists({
         userId,
         items: {
           $elemMatch: {
             productId: prodIdStr,
-            quantity: { $lte: MAX_ITEM_QUANTITY - numQty },
+            quantity: { $gt: MAX_ITEM_QUANTITY - numQty },
           },
         },
-      },
-      { $inc: { "items.$.quantity": numQty } },
-      { returnDocument: "after" }
-    );
+      });
+      if (overCap) return null;
 
-    if (!cart && (await Cart.exists({ userId, "items.productId": prodIdStr }))) {
+      // 2. Push only if the line is still absent. If another request added it meanwhile,
+      // the filter misses, the upsert hits the unique userId (E11000) and we retry.
+      return Cart.findOneAndUpdate(
+        { userId, "items.productId": { $ne: prodIdStr } },
+        { $push: { items: { productId: prodIdStr, quantity: numQty } } },
+        { returnDocument: "after", upsert: true }
+      );
+    });
+
+    if (!cart) {
       return res.status(400).json({
         success: false,
         message: `You can add at most ${MAX_ITEM_QUANTITY} of this item`,
       });
-    }
-
-    // 2. If the product was not in the cart (or cart does not exist), push item and upsert
-    if (!cart) {
-      cart = await Cart.findOneAndUpdate(
-        { userId },
-        {
-          $push: {
-            items: {
-              productId: prodIdStr,
-              quantity: numQty,
-            },
-          },
-        },
-        { returnDocument: "after", upsert: true }
-      );
     }
 
     return res.status(200).json({

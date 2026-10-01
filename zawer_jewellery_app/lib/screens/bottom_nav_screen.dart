@@ -20,6 +20,9 @@ class _BottomNavScreenState
 
   int currentIndex = 0;
 
+  final GlobalKey<HomeScreenState> homeKey =
+  GlobalKey();
+
   final GlobalKey<WishlistScreenState>
   wishlistKey = GlobalKey();
 
@@ -28,7 +31,7 @@ class _BottomNavScreenState
 
   late final List<Widget> screens = [
 
-    const HomeScreen(),
+    HomeScreen(key: homeKey),
 
     WishlistScreen(key: wishlistKey),
 
@@ -46,6 +49,7 @@ class _BottomNavScreenState
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         if (currentIndex != 0) {
+          homeKey.currentState?.loadWishlistState();
           setState(() {
             currentIndex = 0;
           });
@@ -73,6 +77,10 @@ class _BottomNavScreenState
         backgroundColor: Theme.of(context).colorScheme.surface,
 
         onTap: (index){
+
+          if (index == 0) {
+            homeKey.currentState?.loadWishlistState();
+          }
 
           if (index == 1) {
             wishlistKey.currentState

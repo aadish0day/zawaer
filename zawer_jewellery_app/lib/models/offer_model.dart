@@ -52,24 +52,27 @@ class OfferModel {
     return "On orders above ₹${minOrderAmount.toStringAsFixed(0)}";
   }
 
+  // Mirrors Offer.calculateDiscount on the server, including the final
+  // Math.round (same as roundToDouble for the non-negative values here).
   double calculateDiscount(double subtotal) {
     if (subtotal < minOrderAmount) return 0.0;
+    double discount = 0.0;
     if (discountType == "percentage") {
-      final raw = (subtotal * discountValue) / 100.0;
-      if (maxDiscount > 0 && raw > maxDiscount) {
-        return maxDiscount;
+      discount = (subtotal * discountValue) / 100.0;
+      if (maxDiscount > 0 && discount > maxDiscount) {
+        discount = maxDiscount;
       }
-      return raw;
-    } else {
-      return discountValue > subtotal ? subtotal : discountValue;
+    } else if (discountType == "flat") {
+      discount = discountValue > subtotal ? subtotal : discountValue;
     }
+    return discount.roundToDouble();
   }
 
   factory OfferModel.fromJson(Map<String, dynamic> json) {
     DateTime? exp;
     if (json["expiryDate"] != null) {
       try {
-        exp = DateTime.parse(json["expiryDate"].toString());
+        exp = DateTime.parse(json["expiryDate"].toString()).toLocal();
       } catch (_) {}
     }
 

@@ -146,23 +146,38 @@ void main() {
       expect(order.timeline[5].isCompleted, isFalse); // Delivered
     });
 
-    test('All 6 tracking stage names are mapped and normalized correctly', () {
-      final allStages = [
-        "Order Placed",
-        "Order Confirmed",
-        "Processing",
-        "Shipped",
-        "Out for Delivery",
-        "Delivered",
-      ];
+    test('OrderTrackingModel falls back to raw order fields for a Cancelled order', () {
+      // Shape of a plain order document (no tracking payload), plus junk
+      // entries the parser must skip rather than crash on.
+      final json = {
+        '_id': '66ca00000000000000000099',
+        'status': 'Cancelled',
+        'estimatedDelivery': 'not-a-date',
+        'totalAmount': 4999.5,
+        'items': [
+          {'productId': 'p1', 'name': 'Gold Hoop', 'price': 4999.5},
+          'garbage',
+        ],
+        'timeline': [
+          {'status': 'Order Placed', 'isCompleted': true},
+          {'status': 'Cancelled', 'isCompleted': 'yes'},
+          42,
+        ],
+      };
 
-      for (int i = 0; i < allStages.length; i++) {
-        final stage = allStages[i];
-        final idx = allStages.indexWhere(
-          (s) => s.toLowerCase() == stage.toLowerCase(),
-        );
-        expect(idx, i, reason: "Stage '$stage' should map to index $i");
-      }
+      final order = OrderTrackingModel.fromJson(json);
+
+      expect(order.orderId, '66ca00000000000000000099');
+      expect(order.currentStatus, 'Cancelled');
+      expect(order.trackingNumber, 'ZWR-TRACKING');
+      expect(order.estimatedDelivery, isNull);
+      expect(order.createdAt, isNull);
+      expect(order.totalAmount, 4999.5);
+      expect(order.items.length, 1);
+      expect(order.items.single.quantity, 1);
+      expect(order.timeline.map((s) => s.status), ['Order Placed', 'Cancelled']);
+      // Only a literal `true` counts as completed.
+      expect(order.timeline[1].isCompleted, isFalse);
     });
   });
 }

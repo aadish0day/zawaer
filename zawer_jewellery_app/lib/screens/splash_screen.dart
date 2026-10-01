@@ -35,6 +35,13 @@ class _SplashScreenState extends State<SplashScreen> {
     String token =
         prefs.getString("token") ?? "";
 
+    // "Remember Me" unchecked: the session only lasts until the app restarts.
+    // A missing flag (logins from older builds) keeps the session.
+    if (token.isNotEmpty && prefs.getBool("rememberMe") == false) {
+      await ApiService.clearAuth();
+      token = "";
+    }
+
     // Verify the saved session. A 401 clears stored auth inside ApiService;
     // network errors keep the saved session (offline tolerance).
     if (token.isNotEmpty) {
@@ -72,7 +79,7 @@ class _SplashScreenState extends State<SplashScreen> {
     return PopScope(
       canPop: false,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
 
         body: Center(
         child: Column(
@@ -88,7 +95,7 @@ class _SplashScreenState extends State<SplashScreen> {
               width: 130,
 
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
 
                 borderRadius:
                 BorderRadius.circular(35),

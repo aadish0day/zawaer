@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
@@ -338,11 +339,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               "Please enter your email";
                           }
 
-                          if (!RegExp(
-                            r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,4}$',
-                          ).hasMatch(
-                            value.trim(),
-                          )) {
+                          if (!isValidEmail(value)) {
                             return
                               "Enter a valid email";
                           }

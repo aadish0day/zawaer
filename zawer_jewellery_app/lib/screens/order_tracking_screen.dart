@@ -103,6 +103,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
   }
 
   Future<void> loadTrackingData() async {
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       errorMessage = null;

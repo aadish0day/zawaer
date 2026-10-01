@@ -33,6 +33,8 @@ class CartScreenState extends State<CartScreen> {
   // LOAD CART FROM BACKEND (MongoDB)
   // =====================================================
   Future<void> loadCart() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       errorMessage = "";
@@ -63,35 +65,24 @@ class CartScreenState extends State<CartScreen> {
       final dynamic rawCart = cartResult["cart"];
       final List items = (rawCart?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, Product> productMap = {};
-
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final product = Product.fromJson(p as Map<String, dynamic>);
-          productMap[product.id] = product;
-        }
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
       for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
+        // Backend populates items[].product; null means the product was deleted.
+        final rawProduct = item["product"];
+        if (rawProduct is! Map<String, dynamic>) continue;
+        final product = Product.fromJson(rawProduct);
 
         joined.add({
-          "productId": productId,
+          "productId": item["productId"]?.toString() ?? product.id,
           "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
-          "name": product?.name ?? "Handcrafted Jewellery Piece",
-          "category": product?.category ?? "Jewellery",
-          "description": product?.description ?? "",
-          "price": product?.price ?? 0.0,
-          "rating": product?.rating ?? 4.8,
-          "image": (product?.images.isNotEmpty ?? false)
-              ? product!.images.first
+          "name": product.name,
+          "category": product.category,
+          "price": product.price,
+          "image": product.images.isNotEmpty
+              ? product.images.first
               : "assets/images/ring.png",
-          "allImages": product?.images ?? [],
+          "product": product,
         });
       }
 
@@ -114,35 +105,55 @@ class CartScreenState extends State<CartScreen> {
   // =====================================================
   // UPDATE QUANTITY
   // =====================================================
-  Future<void> changeQuantity(int index, int newQuantity) async {
+  // Latest desired quantity per productId, and the items with a PUT in flight.
+  // Rapid taps only update the desired value; one PUT runs at a time per item
+  // and always sends the newest value, so responses can't land out of order.
+  final Map<String, int> _desiredQty = {};
+  final Set<String> _qtyInFlight = {};
+
+  void changeQuantity(int index, int newQuantity) {
     if (newQuantity < 1 || newQuantity > 10) return;
     HapticFeedback.selectionClick();
 
-    final item = cartItems[index];
+    final productId = cartItems[index]["productId"].toString();
 
     setState(() {
       cartItems[index]["quantity"] = newQuantity;
     });
 
-    final result = await ApiService.updateCartQuantity(
-      productId: item["productId"].toString(),
-      quantity: newQuantity,
-    );
+    _desiredQty[productId] = newQuantity;
+    if (_qtyInFlight.add(productId)) _syncQuantity(productId);
+  }
 
-    if (!mounted) return;
+  Future<void> _syncQuantity(String productId) async {
+    try {
+      while (_desiredQty.containsKey(productId)) {
+        final quantity = _desiredQty.remove(productId)!;
+        final result = await ApiService.updateCartQuantity(
+          productId: productId,
+          quantity: quantity,
+        );
 
-    if (result["success"] != true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.red.shade900,
-          content: Text(
-            result["message"]?.toString() ?? "Could not update quantity",
-            style: AppFonts.poppins(color: Colors.white),
-          ),
-        ),
-      );
-      loadCart();
+        if (!mounted) return;
+
+        if (result["success"] != true) {
+          _desiredQty.remove(productId);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.red.shade900,
+              content: Text(
+                result["message"]?.toString() ?? "Could not update quantity",
+                style: AppFonts.poppins(color: Colors.white),
+              ),
+            ),
+          );
+          loadCart();
+          return;
+        }
+      }
+    } finally {
+      _qtyInFlight.remove(productId);
     }
   }
 
@@ -152,6 +163,7 @@ class CartScreenState extends State<CartScreen> {
   Future<void> removeItem(int index) async {
     HapticFeedback.lightImpact();
     final item = cartItems[index];
+    _desiredQty.remove(item["productId"].toString());
 
     setState(() {
       cartItems.removeAt(index);
@@ -360,17 +372,7 @@ class CartScreenState extends State<CartScreen> {
   // =========================================================================
   Widget buildLuxuryCartItem(int index, bool isDark) {
     final item = cartItems[index];
-    final imagesList = (item["allImages"] as List?)?.map((e) => e.toString()).toList() ?? [item["image"].toString()];
-
-    final productObj = Product(
-      id: item["productId"].toString(),
-      name: item["name"].toString(),
-      category: item["category"].toString(),
-      description: item["description"]?.toString() ?? "",
-      price: (item["price"] as num?)?.toDouble() ?? 0.0,
-      rating: (item["rating"] as num?)?.toDouble() ?? 4.8,
-      images: imagesList,
-    );
+    final productObj = item["product"] as Product;
 
     final quantity = (item["quantity"] as num?)?.toInt() ?? 1;
     final itemPrice = (item["price"] as num?)?.toDouble() ?? 0.0;

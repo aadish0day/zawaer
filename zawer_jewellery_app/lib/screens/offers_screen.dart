@@ -100,6 +100,8 @@ class _OffersScreenState extends State<OffersScreen> {
         isLoading = false;
         errorMessage = "";
       });
+      // Re-run the calculator against the real offer terms.
+      _recalculateSimulation();
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -789,14 +791,14 @@ class _OffersScreenState extends State<OffersScreen> {
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isExpired ? Colors.grey.shade800 : AppColors.primary,
+                    backgroundColor: offer.isValid ? AppColors.primary : Colors.grey.shade800,
                     foregroundColor: Colors.white,
                     elevation: 0,
                     minimumSize: const Size(110, 34),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  onPressed: isExpired
+                  onPressed: !offer.isValid
                       ? null
                       : () {
                           copyCouponCode(offer.code);
@@ -806,7 +808,11 @@ class _OffersScreenState extends State<OffersScreen> {
                           );
                         },
                   child: Text(
-                    isExpired ? "EXPIRED" : "APPLY IN BAG",
+                    isExpired
+                        ? "EXPIRED"
+                        : offer.isValid
+                            ? "APPLY IN BAG"
+                            : "UNAVAILABLE",
                     style: AppFonts.poppins(fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ),

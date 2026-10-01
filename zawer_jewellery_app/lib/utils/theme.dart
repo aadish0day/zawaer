@@ -16,7 +16,7 @@ class AppTheme {
       brightness: Brightness.light,
     ),
 
-    fontFamily: 'Poppins',
+    fontFamily: 'Manrope',
 
     appBarTheme: const AppBarTheme(
       backgroundColor: Colors.white,
@@ -77,7 +77,7 @@ class AppTheme {
       surface: const Color(0xff1E1E1E),
     ),
 
-    fontFamily: 'Poppins',
+    fontFamily: 'Manrope',
 
     appBarTheme: const AppBarTheme(
       backgroundColor: Color(0xff1E1E1E),

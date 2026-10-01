@@ -15,3 +15,12 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+## Release builds
+
+Release builds block plain HTTP (cleartext is only allowed in debug/profile on
+Android, and only local networking on iOS), so point the app at an HTTPS backend:
+
+```
+flutter build apk --release --dart-define=API_BASE_URL=https://your-server
+```
