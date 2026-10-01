@@ -8,11 +8,25 @@ const MAX_OTP_ATTEMPTS = 5;
 const hashOtp = (otp) =>
   crypto.createHash("sha256").update(otp).digest("hex");
 
+// JSON bodies can carry objects/arrays/numbers; only accept real strings.
+const allStrings = (...values) =>
+  values.every((v) => typeof v === "string");
+
+// Optional fields: absent (undefined/null) or a string.
+const optionalStrings = (...values) =>
+  values.every((v) => v == null || typeof v === "string");
+
 const registerUser = async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
 
-    if (!name || !email || !password) {
+    if (
+      !allStrings(name, email, password) ||
+      !optionalStrings(phone) ||
+      !name.trim() ||
+      !email.trim() ||
+      !password
+    ) {
       return res.status(400).json({
         success: false,
         message: "Name, email and password are required",
@@ -55,7 +69,6 @@ const registerUser = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -64,7 +77,7 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (!allStrings(email, password) || !email.trim() || !password) {
       return res.status(400).json({
         success: false,
         message: "Email and password are required",
@@ -123,7 +136,6 @@ const loginUser = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -151,6 +163,8 @@ const getProfile = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Get Profile Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -162,6 +176,13 @@ const updateProfile = async (req, res) => {
   try {
     const { name, phone } = req.body;
 
+    if (!optionalStrings(name, phone)) {
+      return res.status(400).json({
+        success: false,
+        message: "Name and phone must be text",
+      });
+    }
+
     const user = await User.findById(req.user.id);
 
     if (!user) {
@@ -171,12 +192,12 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    if (name) {
+    if (name && name.trim()) {
       user.name = name.trim();
     }
 
-    if (phone !== undefined) {
-      user.phone = String(phone).trim();
+    if (phone != null) {
+      user.phone = phone.trim();
     }
 
     await user.save();
@@ -192,6 +213,8 @@ const updateProfile = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Update Profile Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -203,7 +226,7 @@ const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
 
-    if (!email) {
+    if (!allStrings(email) || !email.trim()) {
       return res.status(400).json({
         success: false,
         message: "Email is required",
@@ -240,6 +263,8 @@ const forgotPassword = async (req, res) => {
 
     return res.status(200).json(responsePayload);
   } catch (error) {
+    console.error("Forgot Password Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -251,7 +276,12 @@ const resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
-    if (!email || !otp || !newPassword) {
+    if (
+      !allStrings(email, otp, newPassword) ||
+      !email.trim() ||
+      !otp.trim() ||
+      !newPassword
+    ) {
       return res.status(400).json({
         success: false,
         message: "Email, OTP and new password are required",
@@ -281,7 +311,9 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    if (user.otpCode !== hashOtp(String(otp).trim())) {
+    const otpHash = hashOtp(otp.trim());
+
+    if (user.otpCode !== otpHash) {
       // Atomic increment so parallel guesses can't skip past the limit
       const updated = await User.findOneAndUpdate(
         { _id: user._id, otpCode: user.otpCode },
@@ -308,19 +340,44 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    user.password = await bcrypt.hash(newPassword, 10);
-    user.passwordChangedAt = new Date();
-    user.otpCode = "";
-    user.otpExpiry = null;
-    user.otpAttempts = 0;
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const now = new Date();
 
-    await user.save();
+    // Conditional atomic write: the OTP must still be current, unexpired and
+    // under the attempt limit at write time, so a guess racing a lockout (or a
+    // second request after a successful reset) cannot succeed on stale state.
+    const reset = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        otpCode: otpHash,
+        otpExpiry: { $gt: now },
+        otpAttempts: { $lt: MAX_OTP_ATTEMPTS },
+      },
+      {
+        $set: {
+          password: hashedPassword,
+          passwordChangedAt: now,
+          otpCode: "",
+          otpExpiry: null,
+          otpAttempts: 0,
+        },
+      }
+    );
+
+    if (!reset) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP",
+      });
+    }
 
     return res.status(200).json({
       success: true,
       message: "Password reset successful",
     });
   } catch (error) {
+    console.error("Reset Password Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Server error",

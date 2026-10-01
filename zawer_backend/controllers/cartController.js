@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Cart = require("../models/Cart");
 const Product = require("../models/Product");
 const { MAX_ITEM_QUANTITY } = require("./orderController");
@@ -15,6 +16,29 @@ const retryOnDuplicate = async (fn) => {
   }
 };
 
+// Maps stored productIds (custom id or legacy Mongo _id) to the product's custom id.
+// Ids of deleted products are absent from the map.
+const canonicalProductIds = async (ids) => {
+  const objectIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const products = await Product.find(
+    { $or: [{ id: { $in: ids } }, { _id: { $in: objectIds } }] },
+    "id"
+  );
+  const map = new Map();
+  for (const p of products) {
+    map.set(p.id, p.id);
+    map.set(p._id.toString(), p.id);
+  }
+  return map;
+};
+
+// Every form a :productId param may be stored under (raw, custom id, _id).
+const productIdForms = async (rawId) => {
+  const pid = String(rawId);
+  const product = await Product.findByAnyId(pid);
+  return product ? [pid, product.id, product._id.toString()] : [pid];
+};
+
 const getCart = async (req, res) => {
   try {
     const userId = req.user.id.toString();
@@ -24,12 +48,30 @@ const getCart = async (req, res) => {
         { userId },
         { $setOnInsert: { items: [] } },
         { returnDocument: "after", upsert: true }
-      ).populate({ path: "items.product", select: "-reviews" })
+      )
     );
+
+    // Normalize legacy _id lines to the custom id (merged, capped) and drop deleted products
+    if (cart.items.length > 0) {
+      const canonical = await canonicalProductIds(cart.items.map((i) => i.productId));
+      const merged = new Map();
+      for (const { productId, quantity } of cart.items) {
+        const id = canonical.get(productId);
+        if (id) merged.set(id, Math.min(MAX_ITEM_QUANTITY, (merged.get(id) || 0) + quantity));
+      }
+      const items = [...merged].map(([productId, quantity]) => ({ productId, quantity }));
+      const changed =
+        items.length !== cart.items.length ||
+        items.some((it, i) => it.productId !== cart.items[i].productId || it.quantity !== cart.items[i].quantity);
+      if (changed) {
+        // Guarded on updatedAt so a concurrent add isn't overwritten; a miss just retries next read
+        await Cart.updateOne({ _id: cart._id, updatedAt: cart.updatedAt }, { $set: { items } });
+      }
+    }
 
     return res.status(200).json({
       success: true,
-      cart,
+      cart: await Cart.findById(cart._id).populate({ path: "items.product", select: "-reviews" }),
     });
   } catch (error) {
     console.error("Get Cart Error:", error.message);
@@ -147,9 +189,9 @@ const updateCartQuantity = async (req, res) => {
       });
     }
 
-    const prodIdStr = productId.toString();
+    const ids = await productIdForms(productId);
     const cart = await Cart.findOneAndUpdate(
-      { userId, "items.productId": prodIdStr },
+      { userId, "items.productId": { $in: ids } },
       { $set: { "items.$.quantity": quantity } },
       { returnDocument: "after" }
     );
@@ -180,10 +222,10 @@ const removeFromCart = async (req, res) => {
     const userId = req.user.id.toString();
     const productId = req.params.productId;
 
-    const prodIdStr = productId.toString();
+    const ids = await productIdForms(productId);
     const cart = await Cart.findOneAndUpdate(
       { userId },
-      { $pull: { items: { productId: prodIdStr } } },
+      { $pull: { items: { productId: { $in: ids } } } },
       { returnDocument: "after" }
     );
 
@@ -245,4 +287,6 @@ module.exports = {
   updateCartQuantity,
   removeFromCart,
   clearCart,
+  canonicalProductIds,
+  productIdForms,
 };

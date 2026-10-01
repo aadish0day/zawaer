@@ -12,11 +12,32 @@ import 'screens/checkout_screen.dart';
 import 'screens/bottom_nav_screen.dart';
 import 'screens/orders_screen.dart';
 
+import 'services/api_service.dart';
 import 'utils/theme.dart';
 import 'utils/theme_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Misconfigured build (e.g. release without API_BASE_URL): say so plainly
+  // instead of failing on every request.
+  final String? configError = ApiService.configError;
+  if (configError != null) {
+    runApp(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(30),
+              child: Text(configError, textAlign: TextAlign.center),
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
 
   await ThemeController.load();
 

@@ -15,10 +15,10 @@ class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  State<ProfileScreen> createState() => ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class ProfileScreenState extends State<ProfileScreen> {
   bool isLoggedIn = false;
   String userName = "";
   String userEmail = "";
@@ -75,6 +75,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       if (!mounted) return;
 
+      // Session expired / revoked: re-read prefs so the guest view shows.
+      if (ordersRes["statusCode"] == 401 || wishRes["statusCode"] == 401) {
+        await loadUserData();
+        if (!mounted) return;
+      }
+
       int oCount = 0;
       if (ordersRes["success"] == true && ordersRes["orders"] is List) {
         oCount = (ordersRes["orders"] as List).length;
@@ -108,6 +114,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       MaterialPageRoute(builder: (_) => const LoginScreen()),
     );
     if (!mounted) return;
+    await reload();
+  }
+
+  // Called by BottomNavScreen when the Profile tab is selected.
+  Future<void> reload() async {
     await Future.wait([loadUserData(), loadProfileStats()]);
   }
 

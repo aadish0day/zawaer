@@ -45,7 +45,7 @@ class _SplashScreenState extends State<SplashScreen> {
     // Verify the saved session. A 401 clears stored auth inside ApiService;
     // network errors keep the saved session (offline tolerance).
     if (token.isNotEmpty) {
-      final profile = await ApiService.getProfile();
+      final profile = await ApiService.getProfile(quick: true);
       if (profile["statusCode"] == 401) {
         token = "";
       } else if (profile["success"] == true && profile["user"] is Map) {

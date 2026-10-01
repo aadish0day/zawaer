@@ -33,7 +33,9 @@ const getProducts = async (req, res) => {
     const { page, limit, skip } = paging;
 
     const total = await Product.countDocuments();
+    // Reviews have their own endpoint; never ship them (or reviewer ids) in lists
     const products = await Product.find()
+      .select("-reviews")
       .sort({
         createdAt: -1,
       })
@@ -65,7 +67,7 @@ const getProductById = async (req, res) => {
   try {
     const product = await Product.findOne({
       id: req.params.id,
-    });
+    }).select("-reviews");
 
     if (!product) {
       return res.status(404).json({
@@ -119,6 +121,7 @@ const searchProducts = async (req, res) => {
 
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
+      .select("-reviews")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -240,9 +243,15 @@ const getProductReviews = async (req, res) => {
       });
     }
 
-    const sortedReviews = [...product.reviews].sort(
-      (a, b) => new Date(b.date) - new Date(a.date)
-    );
+    // Public shape only: no reviewer userId
+    const sortedReviews = [...product.reviews]
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .map(({ rating, userName, comment, date }) => ({
+        rating,
+        userName,
+        comment,
+        date,
+      }));
 
     return res.status(200).json({
       success: true,

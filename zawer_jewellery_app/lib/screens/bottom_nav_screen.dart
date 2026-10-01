@@ -29,6 +29,9 @@ class _BottomNavScreenState
   final GlobalKey<CartScreenState> cartKey =
   GlobalKey();
 
+  final GlobalKey<ProfileScreenState> profileKey =
+  GlobalKey();
+
   late final List<Widget> screens = [
 
     HomeScreen(key: homeKey),
@@ -37,7 +40,7 @@ class _BottomNavScreenState
 
     CartScreen(key: cartKey),
 
-    const ProfileScreen(),
+    ProfileScreen(key: profileKey),
 
   ];
 
@@ -89,6 +92,10 @@ class _BottomNavScreenState
 
           if (index == 2) {
             cartKey.currentState?.loadCart();
+          }
+
+          if (index == 3) {
+            profileKey.currentState?.reload();
           }
 
           setState(() {

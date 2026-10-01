@@ -118,7 +118,14 @@ const main = async () => {
 
   // First review: seeded rating is the baseline until real reviews exist
   r = await call("GET", "/api/products?limit=100");
-  const fresh = r.data.products.find((p) => p.reviews.length === 0 && p.rating > 0);
+  // Lists no longer carry reviews: ask the reviews endpoint which product is unreviewed
+  let fresh;
+  for (const p of r.data.products.filter((p) => p.rating > 0)) {
+    if ((await call("GET", `/api/products/${p.id}/reviews`)).data.totalReviews === 0) {
+      fresh = p;
+      break;
+    }
+  }
   if (!fresh) {
     console.log("skip first-review check: no unreviewed seeded product left (reseed)");
   } else {

@@ -8,4 +8,14 @@ void main() {
     expect(ApiService.maxAttempts("DELETE"), 3);
     expect(ApiService.maxAttempts("POST"), 1);
   });
+
+  test('retry: false sends once regardless of method (order status PUT)', () {
+    expect(ApiService.maxAttempts("PUT", retry: false), 1);
+    expect(ApiService.maxAttempts("GET", retry: false), 1);
+  });
+
+  test('debug/test builds have no config error and a usable baseUrl', () {
+    expect(ApiService.configError, isNull);
+    expect(ApiService.baseUrl, startsWith("http"));
+  });
 }

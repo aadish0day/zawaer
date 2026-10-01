@@ -1,5 +1,6 @@
 const Wishlist = require("../models/Wishlist");
 const Product = require("../models/Product");
+const { canonicalProductIds, productIdForms } = require("./cartController");
 
 // Concurrent upserts on the unique userId can lose with E11000; the retry sees the winner's doc.
 const retryOnDuplicate = async (fn) => {
@@ -20,14 +21,28 @@ const getWishlist = async (req, res) => {
         { userId },
         { $setOnInsert: { items: [] } },
         { returnDocument: "after", upsert: true }
-      ).populate({ path: "items.product", select: "-reviews" })
+      )
     );
+
+    // Normalize legacy _id lines to the custom id (deduped) and drop deleted products
+    if (wishlist.items.length > 0) {
+      const canonical = await canonicalProductIds(wishlist.items.map((i) => i.productId));
+      const ids = [...new Set(wishlist.items.map((i) => canonical.get(i.productId)).filter(Boolean))];
+      if (ids.length !== wishlist.items.length || ids.some((id, i) => id !== wishlist.items[i].productId)) {
+        // Guarded on updatedAt so a concurrent add isn't overwritten; a miss just retries next read
+        await Wishlist.updateOne(
+          { _id: wishlist._id, updatedAt: wishlist.updatedAt },
+          { $set: { items: ids.map((productId) => ({ productId })) } }
+        );
+      }
+    }
 
     return res.status(200).json({
       success: true,
-      wishlist,
+      wishlist: await Wishlist.findById(wishlist._id).populate({ path: "items.product", select: "-reviews" }),
     });
   } catch (error) {
+    console.error("Get Wishlist Error:", error.message);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch wishlist",
@@ -89,10 +104,10 @@ const removeFromWishlist = async (req, res) => {
     const productId = req.params.productId;
     const userId = req.user.id;
 
-    const prodIdStr = productId.toString();
+    const ids = await productIdForms(productId);
     const wishlist = await Wishlist.findOneAndUpdate(
       { userId },
-      { $pull: { items: { productId: prodIdStr } } },
+      { $pull: { items: { productId: { $in: ids } } } },
       { returnDocument: "after" }
     );
 

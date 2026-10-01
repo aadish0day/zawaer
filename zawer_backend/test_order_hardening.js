@@ -66,11 +66,12 @@ async function main() {
   // 1b. Status only moves forward
   const fwd = await call(orders.updateOrderStatus, { user: ADMIN, params: { id: o1._id.toString() }, body: { status: "Shipped" } });
   assert.strictEqual(fwd.status, 200, "forward status update must succeed");
-  for (const status of ["Processing", "Shipped"]) {
-    const back = await call(orders.updateOrderStatus, { user: ADMIN, params: { id: o1._id.toString() }, body: { status } });
-    assert.strictEqual(back.status, 400, `Shipped -> ${status} must be 400`);
-  }
-  console.log("ok  backward / repeated status update -> 400");
+  const back = await call(orders.updateOrderStatus, { user: ADMIN, params: { id: o1._id.toString() }, body: { status: "Processing" } });
+  assert.strictEqual(back.status, 400, "Shipped -> Processing must be 400");
+  // Same status is an idempotent retry: 200, unchanged
+  const same = await call(orders.updateOrderStatus, { user: ADMIN, params: { id: o1._id.toString() }, body: { status: "Shipped" } });
+  assert.strictEqual(same.status, 200, "Shipped -> Shipped must be 200 (idempotent)");
+  console.log("ok  backward status update -> 400, repeated -> 200");
 
   // 2. Other users cannot see the order by id or tracking number
   for (const id of [o1._id.toString(), o1.trackingNumber, o1.trackingNumber.toLowerCase()]) {

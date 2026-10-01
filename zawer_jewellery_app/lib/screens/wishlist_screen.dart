@@ -193,6 +193,7 @@ class WishlistScreenState extends State<WishlistScreen> {
             label: "VIEW BAG",
             textColor: AppColors.gold,
             onPressed: () {
+              if (!mounted) return;
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const CartScreen()),
@@ -244,7 +245,10 @@ class WishlistScreenState extends State<WishlistScreen> {
     final messenger = ScaffoldMessenger.of(context);
 
     int successCount = 0;
-    final itemsToMove = List<Map<String, dynamic>>.from(wishlist);
+    // Skip items whose single "move to bag" is already in flight.
+    final itemsToMove = wishlist
+        .where((item) => !movingIds.contains(item["productId"].toString()))
+        .toList();
     for (final item in itemsToMove) {
       final productId = item["productId"].toString();
       final res = await ApiService.addToCart(
@@ -275,6 +279,7 @@ class WishlistScreenState extends State<WishlistScreen> {
           label: "GO TO BAG",
           textColor: AppColors.gold,
           onPressed: () {
+            if (!mounted) return;
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const CartScreen()),

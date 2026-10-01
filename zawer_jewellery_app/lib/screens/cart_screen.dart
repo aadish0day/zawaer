@@ -67,15 +67,24 @@ class CartScreenState extends State<CartScreen> {
 
       final List<Map<String, dynamic>> joined = [];
 
+      // A quantity sync still pending for an item is newer than what the
+      // server just returned; keep the local value for those.
+      final Map<String, int> pendingQty = {
+        for (final item in cartItems)
+          if (_qtySyncs.containsKey(item["productId"].toString()))
+            item["productId"].toString(): (item["quantity"] as num).toInt(),
+      };
+
       for (final item in items) {
         // Backend populates items[].product; null means the product was deleted.
         final rawProduct = item["product"];
         if (rawProduct is! Map<String, dynamic>) continue;
         final product = Product.fromJson(rawProduct);
 
+        final String productId = item["productId"]?.toString() ?? product.id;
         joined.add({
-          "productId": item["productId"]?.toString() ?? product.id,
-          "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
+          "productId": productId,
+          "quantity": pendingQty[productId] ?? (item["quantity"] as num?)?.toInt() ?? 1,
           "name": product.name,
           "category": product.category,
           "price": product.price,
@@ -105,11 +114,13 @@ class CartScreenState extends State<CartScreen> {
   // =====================================================
   // UPDATE QUANTITY
   // =====================================================
-  // Latest desired quantity per productId, and the items with a PUT in flight.
+  // Latest desired quantity per productId, and the running sync loop per item.
   // Rapid taps only update the desired value; one PUT runs at a time per item
   // and always sends the newest value, so responses can't land out of order.
+  // Loops keep running after dispose so pending quantities are never dropped.
   final Map<String, int> _desiredQty = {};
-  final Set<String> _qtyInFlight = {};
+  final Map<String, Future<void>> _qtySyncs = {};
+  bool isWaitingForSync = false;
 
   void changeQuantity(int index, int newQuantity) {
     if (newQuantity < 1 || newQuantity > 10) return;
@@ -122,10 +133,11 @@ class CartScreenState extends State<CartScreen> {
     });
 
     _desiredQty[productId] = newQuantity;
-    if (_qtyInFlight.add(productId)) _syncQuantity(productId);
+    _qtySyncs[productId] ??= _syncQuantity(productId);
   }
 
   Future<void> _syncQuantity(String productId) async {
+    String? failure;
     try {
       while (_desiredQty.containsKey(productId)) {
         final quantity = _desiredQty.remove(productId)!;
@@ -134,27 +146,63 @@ class CartScreenState extends State<CartScreen> {
           quantity: quantity,
         );
 
-        if (!mounted) return;
-
         if (result["success"] != true) {
           _desiredQty.remove(productId);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: Colors.red.shade900,
-              content: Text(
-                result["message"]?.toString() ?? "Could not update quantity",
-                style: AppFonts.poppins(color: Colors.white),
-              ),
-            ),
+          failure = result["message"]?.toString() ?? "Could not update quantity";
+          break;
+        }
+
+        // Reconcile with the server-confirmed value unless a newer tap is queued.
+        if (mounted && !_desiredQty.containsKey(productId)) {
+          final List serverItems = (result["cart"]?["items"] ?? const []) as List;
+          final confirmed = serverItems.firstWhere(
+            (i) => i["productId"]?.toString() == productId,
+            orElse: () => null,
           );
-          loadCart();
-          return;
+          final int confirmedQty = (confirmed?["quantity"] as num?)?.toInt() ?? quantity;
+          setState(() {
+            for (final item in cartItems) {
+              if (item["productId"].toString() == productId) item["quantity"] = confirmedQty;
+            }
+          });
         }
       }
     } finally {
-      _qtyInFlight.remove(productId);
+      _qtySyncs.remove(productId);
     }
+
+    if (failure != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red.shade900,
+          content: Text(failure, style: AppFonts.poppins(color: Colors.white)),
+        ),
+      );
+      loadCart();
+    }
+  }
+
+  Future<void> proceedToCheckout() async {
+    if (isWaitingForSync) return;
+    HapticFeedback.mediumImpact();
+
+    if (_qtySyncs.isNotEmpty) {
+      setState(() => isWaitingForSync = true);
+      while (_qtySyncs.isNotEmpty) {
+        await Future.wait(_qtySyncs.values.toList());
+      }
+      if (!mounted) return;
+      setState(() => isWaitingForSync = false);
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
+      ),
+    );
+    loadCart();
   }
 
   // =====================================================
@@ -729,17 +777,14 @@ class CartScreenState extends State<CartScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                 ),
-                onPressed: () async {
-                  HapticFeedback.mediumImpact();
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
-                    ),
-                  );
-                  loadCart();
-                },
-                child: Row(
+                onPressed: isWaitingForSync ? null : proceedToCheckout,
+                child: isWaitingForSync
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const SizedBox(width: 24),

@@ -902,7 +902,7 @@ if (token.isEmpty) {
   return;
 }
 
-// Check out only this piece (qty 1); the cart is left untouched.
+// Check out only this piece at the selected qty; the cart is left untouched.
 final product = widget.product;
 await navigator.push(
 MaterialPageRoute(
@@ -910,7 +910,7 @@ builder: (_) => CheckoutScreen(
 buyNowItems: [
 {
 "productId": product.id,
-"quantity": 1,
+"quantity": quantity,
 "name": product.name,
 "price": product.price,
 "category": product.category,

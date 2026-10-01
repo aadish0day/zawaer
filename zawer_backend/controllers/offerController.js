@@ -1,10 +1,13 @@
 const Offer = require("../models/Offer");
 const Product = require("../models/Product");
+const Order = require("../models/Order");
 const {
   priceItems,
   eligibleSubtotalFor,
   isAllCategories,
 } = require("./orderController");
+
+const MAX_ITEMS = 50;
 
 // =========================================================
 // GET ALL ACTIVE OFFERS & PROMOTIONS
@@ -26,7 +29,8 @@ exports.getAllOffers = async (req, res) => {
         offer.isActive &&
         !isExpired &&
         !(offer.startDate && now < offer.startDate) &&
-        (offer.usageLimit === 0 || offer.usedCount < offer.usageLimit);
+        // null / <= 0 = unlimited, same as checkout
+        (!(offer.usageLimit > 0) || offer.usedCount < offer.usageLimit);
 
       return {
         id: offer._id,
@@ -57,10 +61,10 @@ exports.getAllOffers = async (req, res) => {
       offers: formattedOffers,
     });
   } catch (error) {
+    console.error("Get Offers Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to retrieve offers",
-      error: error.message,
     });
   }
 };
@@ -75,7 +79,9 @@ exports.getDiscountedProducts = async (req, res) => {
         { isSpecialOffer: true },
         { discountPercentage: { $gt: 0 } },
       ],
-    }).sort({ discountPercentage: -1 });
+    })
+      .select("-reviews")
+      .sort({ discountPercentage: -1 });
 
     res.status(200).json({
       success: true,
@@ -83,10 +89,10 @@ exports.getDiscountedProducts = async (req, res) => {
       products: discountedProducts,
     });
   } catch (error) {
+    console.error("Get Discounted Products Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch discounted products",
-      error: error.message,
     });
   }
 };
@@ -111,6 +117,12 @@ exports.validateCoupon = async (req, res) => {
     // Preferred: price { productId, quantity } items from the DB so the preview matches checkout.
     // Without items, fall back to the client-supplied subtotal/category (legacy callers).
     let lines = null;
+    if (items != null && (!Array.isArray(items) || items.length > MAX_ITEMS)) {
+      return res.status(400).json({
+        success: false,
+        message: `items must be an array of at most ${MAX_ITEMS} entries`,
+      });
+    }
     if (Array.isArray(items) && items.length > 0) {
       const priced = await priceItems(items);
       if (priced.error) {
@@ -171,6 +183,21 @@ exports.validateCoupon = async (req, res) => {
       });
     }
 
+    // Per-user limit (signed-in callers only; checkout enforces it regardless)
+    if (offer.perUserLimit > 0 && req.user) {
+      const userUses = await Order.countDocuments({
+        userId: req.user.id,
+        couponCode: code,
+        status: { $ne: "Cancelled" },
+      });
+      if (userUses >= offer.perUserLimit) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' has already been used on your account`,
+        });
+      }
+    }
+
     // Category Restriction Check (eligibleSubtotal = value of matching items only)
     let eligibleSubtotal = orderSubtotal;
     if (lines) {
@@ -227,10 +254,10 @@ exports.validateCoupon = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Validate Coupon Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to validate coupon code",
-      error: error.message,
     });
   }
 };
@@ -261,10 +288,10 @@ exports.getOfferByCode = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Get Offer Error:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching offer",
-      error: error.message,
     });
   }
 };

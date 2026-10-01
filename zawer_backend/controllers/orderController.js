@@ -121,6 +121,9 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Orders created before trackingNumber was stored show a number derived from their _id.
+const derivedTrackingNumber = (id) => "ZWR-" + id.toString().slice(-6).toUpperCase();
+
 // Lookups are always scoped to userId; only admin callers may pass { allUsers: true }.
 const findOrderFlexible = async (query, userId, { allUsers = false } = {}) => {
   if (!query) return null;
@@ -142,10 +145,26 @@ const findOrderFlexible = async (query, userId, { allUsers = false } = {}) => {
     trackingNumber: { $regex: new RegExp(`^${safeQuery}$`, "i") },
   };
   if (userId) criteriaTracking.userId = userId;
-  return Order.findOne(criteriaTracking);
+  const order = await Order.findOne(criteriaTracking);
+  if (order) return order;
+
+  // Legacy orders without a stored trackingNumber: match the _id suffix the API displays.
+  // ponytail: $expr scan over orders lacking a trackingNumber (cheap per user, a full scan for
+  // admins); backfill trackingNumber on old orders if that ever gets slow.
+  const legacy = /^ZWR-([0-9a-f]{6})$/i.exec(trimmed);
+  if (!legacy) return null;
+  const criteriaLegacy = {
+    trackingNumber: { $in: [null, ""] },
+    $expr: {
+      $eq: [{ $substrCP: [{ $toString: "$_id" }, 18, 6] }, legacy[1].toLowerCase()],
+    },
+  };
+  if (userId) criteriaLegacy.userId = userId;
+  return Order.findOne(criteriaLegacy);
 };
 
 const MAX_ITEM_QUANTITY = 10;
+const MAX_ORDER_LINES = 50;
 
 const isValidQuantity = (qty) =>
   Number.isInteger(qty) && qty >= 1 && qty <= MAX_ITEM_QUANTITY;
@@ -153,9 +172,17 @@ const isValidQuantity = (qty) =>
 // Prices client items strictly from the DB. Returns { error } or
 // { subtotal, verifiedItems, lines: [{ category, price, quantity }], orderedIds }.
 async function priceItems(items) {
+  if (items.length > MAX_ORDER_LINES) {
+    return { error: `An order can contain at most ${MAX_ORDER_LINES} items` };
+  }
   const productIds = [];
   for (const item of items) {
-    if (!item || !item.productId || item.quantity == null) {
+    if (
+      !item ||
+      !["string", "number"].includes(typeof item.productId) ||
+      !item.productId ||
+      item.quantity == null
+    ) {
       return { error: "Each item needs productId and quantity" };
     }
     if (!isValidQuantity(Number(item.quantity))) {
@@ -185,6 +212,8 @@ async function priceItems(items) {
   const lines = [];
   const orderedIds = new Set();
 
+  // Merge lines naming the same product (by custom id or _id) before pricing and capping
+  const merged = new Map();
   for (const item of items) {
     const pid = item.productId.toString();
     const dbProduct = productMap.get(pid);
@@ -193,11 +222,24 @@ async function priceItems(items) {
       return { error: `Product not found: ${item.productId}` };
     }
 
-    const numQty = Number(item.quantity);
+    const key = dbProduct._id.toString();
+    const line = merged.get(key) || { dbProduct, pid, quantity: 0 };
+    line.quantity += Number(item.quantity);
+    merged.set(key, line);
+    orderedIds.add(pid);
+  }
+
+  for (const { dbProduct, pid, quantity: numQty } of merged.values()) {
+    if (numQty > MAX_ITEM_QUANTITY) {
+      return {
+        error: `Total quantity cannot exceed ${MAX_ITEM_QUANTITY} for item: ${dbProduct.id || pid}`,
+      };
+    }
+
     const itemPrice = dbProduct.price;
 
     if (typeof itemPrice !== "number" || isNaN(itemPrice) || itemPrice < 0) {
-      return { error: `Invalid price in database for product: ${item.productId}` };
+      return { error: `Invalid price in database for product: ${dbProduct.id || pid}` };
     }
 
     subtotal += itemPrice * numQty;
@@ -211,7 +253,6 @@ async function priceItems(items) {
     });
     lines.push({ category: dbProduct.category, price: itemPrice, quantity: numQty });
 
-    orderedIds.add(pid);
     if (dbProduct.id) orderedIds.add(dbProduct.id.toString());
     orderedIds.add(dbProduct._id.toString());
   }
@@ -245,19 +286,34 @@ const releaseCoupon = (offerId) =>
 const placeOrder = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { customerName, phone, address, paymentMethod, items, couponCode, idempotencyKey } = req.body;
+    const { items, couponCode, idempotencyKey, fromCart } = req.body;
 
-    if (
-      !customerName ||
-      !phone ||
-      !address ||
-      !Array.isArray(items) ||
-      items.length === 0
-    ) {
+    if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         success: false,
         message: "Customer name, phone, address and at least one item are required",
       });
+    }
+
+    // Contact fields must be non-empty strings; paymentMethod defaults when omitted
+    const contact = {};
+    for (const [field, max] of [["customerName", 100], ["phone", 20], ["address", 500], ["paymentMethod", 30]]) {
+      const value = field === "paymentMethod" && req.body[field] == null ? "Cash on Delivery" : req.body[field];
+      if (typeof value !== "string" || !value.trim() || value.trim().length > max) {
+        return res.status(400).json({
+          success: false,
+          message: `${field} must be a non-empty string of at most ${max} characters`,
+        });
+      }
+      contact[field] = value.trim();
+    }
+
+    if (couponCode != null && typeof couponCode !== "string") {
+      return res.status(400).json({ success: false, message: "couponCode must be a string" });
+    }
+
+    if (fromCart != null && typeof fromCart !== "boolean") {
+      return res.status(400).json({ success: false, message: "fromCart must be a boolean" });
     }
 
     if (
@@ -297,13 +353,14 @@ const placeOrder = async (req, res) => {
     let appliedCoupon = "";
     let appliedOfferId = null;
 
-    if (couponCode && typeof couponCode === "string" && couponCode.trim() !== "") {
+    if (couponCode && couponCode.trim() !== "") {
       const code = couponCode.trim().toUpperCase();
       const offer = await Offer.findOne({ code });
 
       if (!offer) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           message: `Coupon code '${code}' not found in the directory`,
         });
       }
@@ -311,6 +368,7 @@ const placeOrder = async (req, res) => {
       if (!offer.isActive) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           message: `Coupon code '${code}' is no longer active`,
         });
       }
@@ -320,6 +378,7 @@ const placeOrder = async (req, res) => {
       if (offer.isExpired() || now > offer.expiryDate) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           isExpired: true,
           message: `Coupon code '${code}' has expired`,
         });
@@ -328,6 +387,7 @@ const placeOrder = async (req, res) => {
       if (now < offer.startDate) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           message: `Coupon code '${code}' is not active yet`,
         });
       }
@@ -335,6 +395,7 @@ const placeOrder = async (req, res) => {
       if (offer.usageLimit > 0 && offer.usedCount >= offer.usageLimit) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           message: `Coupon code '${code}' has reached its maximum client usage limit`,
         });
       }
@@ -350,6 +411,7 @@ const placeOrder = async (req, res) => {
         if (userUses >= offer.perUserLimit) {
           return res.status(400).json({
             success: false,
+            couponError: true,
             message: `Coupon code '${code}' has already been used on your account`,
           });
         }
@@ -361,6 +423,7 @@ const placeOrder = async (req, res) => {
       if (!isAllCategories(offer.applicableCategory) && eligibleSubtotal <= 0) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           applicableCategory: offer.applicableCategory,
           message: `Coupon code '${code}' is only applicable to ${offer.applicableCategory} collections`,
         });
@@ -369,6 +432,7 @@ const placeOrder = async (req, res) => {
       if (eligibleSubtotal < offer.minOrderAmount) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           minOrderAmount: offer.minOrderAmount,
           message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
         });
@@ -390,6 +454,7 @@ const placeOrder = async (req, res) => {
       if (!reserved) {
         return res.status(400).json({
           success: false,
+          couponError: true,
           message: `Coupon code '${code}' has reached its maximum client usage limit`,
         });
       }
@@ -406,10 +471,7 @@ const placeOrder = async (req, res) => {
 
     const orderData = {
       userId,
-      customerName,
-      phone,
-      address,
-      paymentMethod: paymentMethod || "Cash on Delivery",
+      ...contact,
       items: verifiedItems,
       subtotal,
       discountAmount: finalDiscount,
@@ -423,6 +485,7 @@ const placeOrder = async (req, res) => {
       timeline: initialTimeline,
     };
     if (idempotencyKey) orderData.idempotencyKey = idempotencyKey;
+    if (appliedOfferId) orderData.couponOfferId = appliedOfferId;
 
     // 5. Create the order, retrying on tracking number collisions;
     //    release the coupon reservation if it cannot be created.
@@ -451,11 +514,13 @@ const placeOrder = async (req, res) => {
       throw err;
     }
 
-    // 6. Remove only the ordered products from the cart (keeps the rest, e.g. on Buy Now)
-    try {
-      await Cart.updateOne({ userId }, { $pull: { items: { productId: { $in: orderedIds } } } });
-    } catch (cartError) {
-      console.error("Cart cleanup after order failed:", cartError.message);
+    // 6. Cart checkout: remove only the ordered products. Buy Now (fromCart: false) leaves the cart alone.
+    if (fromCart !== false) {
+      try {
+        await Cart.updateOne({ userId }, { $pull: { items: { productId: { $in: orderedIds } } } });
+      } catch (cartError) {
+        console.error("Cart cleanup after order failed:", cartError.message);
+      }
     }
 
     return res.status(201).json({
@@ -468,7 +533,6 @@ const placeOrder = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to place order",
-      error: error.message,
     });
   }
 };
@@ -487,7 +551,7 @@ const getMyOrders = async (req, res) => {
         orderObj.timeline = updateTimelineForStatus([], orderObj.status || "Order Placed");
       }
       if (!orderObj.trackingNumber) {
-        orderObj.trackingNumber = "ZWR-" + orderObj._id.toString().slice(-6).toUpperCase();
+        orderObj.trackingNumber = derivedTrackingNumber(orderObj._id);
       }
       if (!orderObj.courierPartner) {
         orderObj.courierPartner = "Sequel Secure Luxury Logistics";
@@ -504,10 +568,10 @@ const getMyOrders = async (req, res) => {
       orders,
     });
   } catch (error) {
+    console.error("Get Orders Error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch orders",
-      error: error.message,
     });
   }
 };
@@ -516,8 +580,9 @@ const getOrderById = async (req, res) => {
   try {
     const orderId = req.params.id;
     const userId = req.user && req.user.id;
+    const isAdmin = Boolean(req.user && req.user.role === "admin");
 
-    const order = await findOrderFlexible(orderId, userId);
+    const order = await findOrderFlexible(orderId, isAdmin ? null : userId, { allUsers: isAdmin });
 
     if (!order) {
       return res.status(404).json({
@@ -531,7 +596,7 @@ const getOrderById = async (req, res) => {
       orderObj.timeline = updateTimelineForStatus([], orderObj.status || "Order Placed");
     }
     if (!orderObj.trackingNumber) {
-      orderObj.trackingNumber = "ZWR-" + orderObj._id.toString().slice(-6).toUpperCase();
+      orderObj.trackingNumber = derivedTrackingNumber(orderObj._id);
     }
     if (!orderObj.courierPartner) {
       orderObj.courierPartner = "Sequel Secure Luxury Logistics";
@@ -545,10 +610,10 @@ const getOrderById = async (req, res) => {
       order: orderObj,
     });
   } catch (error) {
+    console.error("Get Order Error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch order",
-      error: error.message,
     });
   }
 };
@@ -557,8 +622,9 @@ const getOrderTracking = async (req, res) => {
   try {
     const query = req.params.id || req.params.query;
     const userId = req.user && req.user.id;
+    const isAdmin = Boolean(req.user && req.user.role === "admin");
 
-    const order = await findOrderFlexible(query, userId);
+    const order = await findOrderFlexible(query, isAdmin ? null : userId, { allUsers: isAdmin });
 
     if (!order) {
       return res.status(404).json({
@@ -575,11 +641,13 @@ const getOrderTracking = async (req, res) => {
 
     const trackingData = {
       orderId: order._id,
-      trackingNumber: order.trackingNumber || ("ZWR-" + order._id.toString().slice(-6).toUpperCase()),
+      trackingNumber: order.trackingNumber || derivedTrackingNumber(order._id),
       currentStatus: order.status === "Placed" ? "Order Placed" : order.status,
       courierPartner: order.courierPartner || "Sequel Secure Luxury Logistics",
       currentLocation: order.currentLocation || "In Transit via Armored Vehicle",
-      estimatedDelivery: order.estimatedDelivery || new Date(Date.now() + 4 * 24 * 60 * 60 * 1000),
+      estimatedDelivery:
+        order.estimatedDelivery ||
+        (order.createdAt ? new Date(new Date(order.createdAt).getTime() + 4 * 24 * 60 * 60 * 1000) : null),
       aiDeliveryInsight: AI_INSIGHTS[order.status] || AI_INSIGHTS["Order Placed"],
       customerName: order.customerName,
       address: order.address,
@@ -595,10 +663,10 @@ const getOrderTracking = async (req, res) => {
       tracking: trackingData,
     });
   } catch (error) {
+    console.error("Order Tracking Error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch order tracking",
-      error: error.message,
     });
   }
 };
@@ -644,6 +712,15 @@ const updateOrderStatus = async (req, res) => {
     }
 
     const previousStatus = order.status;
+    // Retried PUT whose first attempt already applied: report success, change nothing
+    if (status === previousStatus) {
+      return res.status(200).json({
+        success: true,
+        message: `Order status is already ${status}`,
+        order,
+      });
+    }
+
     if (TERMINAL_STATUSES.includes(previousStatus)) {
       return res.status(400).json({
         success: false,
@@ -701,11 +778,19 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    if (status === "Cancelled" && updated.couponCode) {
-      await Offer.updateOne(
-        { code: updated.couponCode, usedCount: { $gt: 0 } },
-        { $inc: { usedCount: -1 } }
-      );
+    if (status === "Cancelled" && (updated.couponOfferId || updated.couponCode)) {
+      // Release by offer id; orders placed before couponOfferId existed fall back to the code.
+      const offerFilter = updated.couponOfferId
+        ? { _id: updated.couponOfferId }
+        : { code: updated.couponCode };
+      try {
+        await Offer.updateOne({ ...offerFilter, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+      } catch (releaseError) {
+        // The cancel is already saved, so don't fail the request.
+        // ponytail: usedCount stays one too high here; a reconciliation job recounting
+        // non-cancelled orders per offer could fix the counts.
+        console.error("Coupon release after cancel failed:", updated._id.toString(), releaseError.message);
+      }
     }
 
     return res.status(200).json({
@@ -714,10 +799,10 @@ const updateOrderStatus = async (req, res) => {
       order: updated,
     });
   } catch (error) {
+    console.error("Update Order Status Error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to update order status",
-      error: error.message,
     });
   }
 };

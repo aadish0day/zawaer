@@ -95,12 +95,21 @@ class HomeScreenState extends State<HomeScreen> {
       isLoadingProducts = true;
     });
 
-    final result = await ApiService.getProducts();
+    // The API is paginated: walk every page (capped so a bad `pages` value
+    // can't loop forever).
+    final List productList = [];
+    Map<String, dynamic> result = const {};
+    for (int page = 1; page <= 20; page++) {
+      result = await ApiService.getProducts(page: page, limit: 100);
+      if (result["success"] != true) break;
+      productList.addAll((result["products"] ?? []) as List);
+      final int pages = (result["pages"] as num?)?.toInt() ?? page;
+      if (page >= pages) break;
+    }
 
     if (!mounted) return;
 
-    if (result["success"] == true) {
-      final List productList = (result["products"] ?? []) as List;
+    if (result["success"] == true || productList.isNotEmpty) {
       setState(() {
         apiProducts = productList
             .map((p) => Product.fromJson(p as Map<String, dynamic>))
@@ -165,10 +174,14 @@ class HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    final res = isWishlisted
-        ? await ApiService.removeFromWishlist(product.id)
-        : await ApiService.addToWishlist(product.id);
-    _togglingWishlistIds.remove(product.id);
+    final Map<String, dynamic> res;
+    try {
+      res = isWishlisted
+          ? await ApiService.removeFromWishlist(product.id)
+          : await ApiService.addToWishlist(product.id);
+    } finally {
+      _togglingWishlistIds.remove(product.id);
+    }
 
     if (res["success"] != true) {
       if (!mounted) return;

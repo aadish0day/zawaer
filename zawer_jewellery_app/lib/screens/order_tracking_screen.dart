@@ -128,7 +128,20 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     }
   }
 
+  // Blocks a second status change while one is in flight.
+  bool isAdvancing = false;
+
   Future<void> advanceToStatus(String status) async {
+    if (isAdvancing) return;
+    isAdvancing = true;
+    try {
+      await _advanceToStatus(status);
+    } finally {
+      isAdvancing = false;
+    }
+  }
+
+  Future<void> _advanceToStatus(String status) async {
     HapticFeedback.mediumImpact();
     final messenger = ScaffoldMessenger.of(context);
 

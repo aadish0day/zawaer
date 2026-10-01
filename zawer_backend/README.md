@@ -24,6 +24,8 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 `NODE_ENV=development` (the example default) returns password-reset OTPs in the API response and logs them. Never use it in production.
 
+Behind a reverse proxy or load balancer, set `TRUST_PROXY` so the auth rate limiter sees the real client IP instead of the proxy's: a hop count (e.g. `1` for a single proxy) or a comma-separated list of trusted proxy IPs/subnets (e.g. `loopback, 10.0.0.0/8`). Leave it unset when clients connect directly, otherwise they can spoof `X-Forwarded-For`. IPv6 clients are rate-limited per /64 prefix.
+
 ### 2. Start the Backend Container
 ```bash
 docker compose up -d --build

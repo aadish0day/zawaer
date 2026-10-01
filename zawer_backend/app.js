@@ -1,3 +1,4 @@
+const net = require("net");
 const express = require("express");
 const cors = require("cors");
 
@@ -21,9 +22,23 @@ const offerRoutes =
 
 const app = express();
 
+// Behind a reverse proxy, set TRUST_PROXY (hop count, or a comma list of
+// proxy IPs/subnets) so req.ip is the real client for the rate limiter.
+if (process.env.TRUST_PROXY) {
+  const trust = process.env.TRUST_PROXY.trim();
+  app.set("trust proxy", /^\d+$/.test(trust) ? Number(trust) : trust);
+}
+
 app.use(cors());
 
 app.use(express.json());
+
+// Express 5 leaves req.body undefined when no JSON body was sent; default it
+// so handlers can destructure without a 500.
+app.use((req, res, next) => {
+  req.body ??= {};
+  next();
+});
 
 app.get("/", (req, res) => {
   res.json({
@@ -41,6 +56,18 @@ const AUTH_RATE_LIMIT = 20;
 const AUTH_RATE_WINDOW_MS = 15 * 60 * 1000;
 const authHits = new Map();
 
+// One IPv6 client usually owns a whole /64, so key IPv6 by its /64 prefix.
+const rateLimitIp = (ip = "") => {
+  if (!net.isIPv6(ip) || ip.toLowerCase().startsWith("::ffff:")) return ip;
+  const [head, tail] = ip.split("%")[0].split("::");
+  const groups = head ? head.split(":") : [];
+  if (tail !== undefined) {
+    const tailGroups = tail ? tail.split(":") : [];
+    groups.push(...Array(Math.max(0, 8 - groups.length - tailGroups.length)).fill("0"), ...tailGroups);
+  }
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+};
+
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of authHits) {
@@ -50,7 +77,7 @@ setInterval(() => {
 
 const authRateLimit = (req, res, next) => {
   // Routing is case-insensitive and non-strict, so normalise the key
-  const key = `${req.ip}:${req.path.toLowerCase().replace(/\/+$/, "")}`;
+  const key = `${rateLimitIp(req.ip)}:${req.path.toLowerCase().replace(/\/+$/, "")}`;
   const now = Date.now();
   const entry = authHits.get(key);
 
