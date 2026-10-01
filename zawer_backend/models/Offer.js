@@ -54,6 +54,10 @@ const offerSchema = new mongoose.Schema(
       type: Number,
       default: 1000,
     },
+    perUserLimit: {
+      type: Number,
+      default: 0, // 0 means unlimited uses per user
+    },
     usedCount: {
       type: Number,
       default: 0,

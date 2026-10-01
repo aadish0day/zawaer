@@ -280,12 +280,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // LOGOUT
   // =====================================================
   Future<void> logoutUser() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.remove("token");
-    await prefs.remove("userId");
-    await prefs.remove("userName");
-    await prefs.remove("userEmail");
-    await prefs.remove("userPhone");
+    await ApiService.clearAuth();
 
     if (!mounted) return;
 

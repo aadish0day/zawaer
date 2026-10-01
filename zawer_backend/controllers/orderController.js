@@ -74,7 +74,26 @@ function updateTimelineForStatus(timeline, currentStatus) {
     (s) => s.status.toLowerCase() === normalizedStatus.toLowerCase()
   );
 
-  if (targetIndex === -1) return timeline;
+  if (targetIndex === -1) {
+    // Cancelled sits outside the 6-stage journey: append it once as a final step
+    if (
+      normalizedStatus.toLowerCase() !== "cancelled" ||
+      (Array.isArray(timeline) && timeline.some((t) => t.status === "Cancelled"))
+    ) {
+      return timeline;
+    }
+    return [
+      ...(Array.isArray(timeline) ? timeline : []),
+      {
+        status: "Cancelled",
+        title: "Order Cancelled",
+        description: "This order was cancelled and any processed payment has been queued for refund.",
+        location: "Order Cancelled - Refund Initiated",
+        timestamp: new Date(),
+        isCompleted: true,
+      },
+    ];
+  }
 
   const now = new Date();
   return TRACKING_STAGES.map((stage, idx) => {
@@ -102,8 +121,10 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const findOrderFlexible = async (query, userId = null) => {
+// Lookups are always scoped to userId; only admin callers may pass { allUsers: true }.
+const findOrderFlexible = async (query, userId, { allUsers = false } = {}) => {
   if (!query) return null;
+  if (!userId && !allUsers) return null;
   const trimmed = query.toString().trim();
 
   // Try by ObjectId if valid
@@ -121,20 +142,110 @@ const findOrderFlexible = async (query, userId = null) => {
     trackingNumber: { $regex: new RegExp(`^${safeQuery}$`, "i") },
   };
   if (userId) criteriaTracking.userId = userId;
-  const orderTracking = await Order.findOne(criteriaTracking);
-  if (orderTracking) return orderTracking;
-
-  // Fallback: If not found under user, but tracking number matches globally
-  const globalTracking = await Order.findOne({
-    trackingNumber: { $regex: new RegExp(`^${safeQuery}$`, "i") },
-  });
-  return globalTracking;
+  return Order.findOne(criteriaTracking);
 };
+
+const MAX_ITEM_QUANTITY = 10;
+
+const isValidQuantity = (qty) =>
+  Number.isInteger(qty) && qty >= 1 && qty <= MAX_ITEM_QUANTITY;
+
+// Prices client items strictly from the DB. Returns { error } or
+// { subtotal, verifiedItems, lines: [{ category, price, quantity }], orderedIds }.
+async function priceItems(items) {
+  const productIds = [];
+  for (const item of items) {
+    if (!item || !item.productId || item.quantity == null) {
+      return { error: "Each item needs productId and quantity" };
+    }
+    if (!isValidQuantity(Number(item.quantity))) {
+      return {
+        error: `Quantity must be a whole number between 1 and ${MAX_ITEM_QUANTITY} for item: ${item.productId}`,
+      };
+    }
+    productIds.push(item.productId.toString());
+  }
+
+  const validObjectIds = productIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const dbProducts = await Product.find({
+    $or: [
+      { id: { $in: productIds } },
+      ...(validObjectIds.length > 0 ? [{ _id: { $in: validObjectIds } }] : []),
+    ],
+  });
+
+  const productMap = new Map();
+  for (const p of dbProducts) {
+    if (p.id) productMap.set(p.id.toString(), p);
+    if (p._id) productMap.set(p._id.toString(), p);
+  }
+
+  let subtotal = 0;
+  const verifiedItems = [];
+  const lines = [];
+  const orderedIds = new Set();
+
+  for (const item of items) {
+    const pid = item.productId.toString();
+    const dbProduct = productMap.get(pid);
+
+    if (!dbProduct) {
+      return { error: `Product not found: ${item.productId}` };
+    }
+
+    const numQty = Number(item.quantity);
+    const itemPrice = dbProduct.price;
+
+    if (typeof itemPrice !== "number" || isNaN(itemPrice) || itemPrice < 0) {
+      return { error: `Invalid price in database for product: ${item.productId}` };
+    }
+
+    subtotal += itemPrice * numQty;
+
+    verifiedItems.push({
+      productId: dbProduct.id || pid,
+      name: dbProduct.name || "Jewellery Item",
+      image: (dbProduct.images && dbProduct.images[0]) || "",
+      price: itemPrice,
+      quantity: numQty,
+    });
+    lines.push({ category: dbProduct.category, price: itemPrice, quantity: numQty });
+
+    orderedIds.add(pid);
+    if (dbProduct.id) orderedIds.add(dbProduct.id.toString());
+    orderedIds.add(dbProduct._id.toString());
+  }
+
+  return { subtotal, verifiedItems, lines, orderedIds: [...orderedIds] };
+}
+
+const isAllCategories = (category) =>
+  typeof category !== "string" || category.trim() === "" || category.trim().toLowerCase() === "all";
+
+// Sum of price * qty over lines whose DB category matches the offer's category.
+function eligibleSubtotalFor(offer, lines) {
+  if (isAllCategories(offer.applicableCategory)) {
+    return lines.reduce((sum, l) => sum + l.price * l.quantity, 0);
+  }
+  const target = offer.applicableCategory.trim().toLowerCase();
+  return lines.reduce(
+    (sum, l) =>
+      typeof l.category === "string" && l.category.trim().toLowerCase() === target
+        ? sum + l.price * l.quantity
+        : sum,
+    0
+  );
+}
+
+const newTrackingNumber = () => "ZWR-" + Math.floor(100000 + Math.random() * 900000);
+
+const releaseCoupon = (offerId) =>
+  Offer.updateOne({ _id: offerId, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
 
 const placeOrder = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { customerName, phone, address, paymentMethod, items, couponCode } = req.body;
+    const { customerName, phone, address, paymentMethod, items, couponCode, idempotencyKey } = req.body;
 
     if (
       !customerName ||
@@ -149,75 +260,37 @@ const placeOrder = async (req, res) => {
       });
     }
 
-    // 1. Extract product IDs and validate quantities
-    const productIds = [];
-    for (const item of items) {
-      if (!item.productId || item.quantity == null) {
-        return res.status(400).json({
-          success: false,
-          message: "Each item needs productId and quantity",
-        });
-      }
-      const numQty = Number(item.quantity);
-      if (isNaN(numQty) || numQty < 1) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid quantity specified for item: ${item.productId}`,
-        });
-      }
-      productIds.push(item.productId.toString());
-    }
-
-    // 2. Query database for products
-    const validObjectIds = productIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
-    const dbProducts = await Product.find({
-      $or: [
-        { id: { $in: productIds } },
-        ...(validObjectIds.length > 0 ? [{ _id: { $in: validObjectIds } }] : []),
-      ],
-    });
-
-    const productMap = new Map();
-    for (const p of dbProducts) {
-      if (p.id) productMap.set(p.id.toString(), p);
-      if (p._id) productMap.set(p._id.toString(), p);
-    }
-
-    // 3. Server-side price validation: Calculate totalAmount strictly using dbProduct.price
-    let subtotal = 0;
-    const verifiedItems = [];
-
-    for (const item of items) {
-      const pid = item.productId.toString();
-      const dbProduct = productMap.get(pid);
-
-      if (!dbProduct) {
-        return res.status(400).json({
-          success: false,
-          message: `Product not found: ${item.productId}`,
-        });
-      }
-
-      const numQty = Number(item.quantity);
-      const itemPrice = dbProduct.price;
-
-      if (typeof itemPrice !== "number" || isNaN(itemPrice) || itemPrice < 0) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid price in database for product: ${item.productId}`,
-        });
-      }
-
-      subtotal += itemPrice * numQty;
-
-      verifiedItems.push({
-        productId: dbProduct.id || pid,
-        name: item.name || dbProduct.name || "Jewellery Item",
-        image: item.image || (dbProduct.images && dbProduct.images[0]) || "",
-        price: itemPrice,
-        quantity: numQty,
+    if (
+      idempotencyKey != null &&
+      (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 64)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "idempotencyKey must be a non-empty string of at most 64 characters",
       });
     }
+
+    // 0. Retried checkout: return the order already created for this key
+    if (idempotencyKey) {
+      const existing = await Order.findOne({ userId, idempotencyKey });
+      if (existing) {
+        return res.status(200).json({
+          success: true,
+          message: "Order placed successfully",
+          order: existing,
+        });
+      }
+    }
+
+    // 1-3. Validate quantities and price every item strictly from the DB
+    const priced = await priceItems(items);
+    if (priced.error) {
+      return res.status(400).json({
+        success: false,
+        message: priced.error,
+      });
+    }
+    const { subtotal, verifiedItems, lines, orderedIds } = priced;
 
     // 4. Strict coupon validation
     let finalDiscount = 0;
@@ -266,7 +339,34 @@ const placeOrder = async (req, res) => {
         });
       }
 
-      if (subtotal < offer.minOrderAmount) {
+      // ponytail: count-then-create, so two simultaneous orders by the same user can both pass;
+      // move to a per-user redemption collection with a unique index if that matters.
+      if (offer.perUserLimit > 0) {
+        const userUses = await Order.countDocuments({
+          userId,
+          couponCode: code,
+          status: { $ne: "Cancelled" },
+        });
+        if (userUses >= offer.perUserLimit) {
+          return res.status(400).json({
+            success: false,
+            message: `Coupon code '${code}' has already been used on your account`,
+          });
+        }
+      }
+
+      // Category coupons only discount the matching items (DB category, not client)
+      const eligibleSubtotal = eligibleSubtotalFor(offer, lines);
+
+      if (!isAllCategories(offer.applicableCategory) && eligibleSubtotal <= 0) {
+        return res.status(400).json({
+          success: false,
+          applicableCategory: offer.applicableCategory,
+          message: `Coupon code '${code}' is only applicable to ${offer.applicableCategory} collections`,
+        });
+      }
+
+      if (eligibleSubtotal < offer.minOrderAmount) {
         return res.status(400).json({
           success: false,
           minOrderAmount: offer.minOrderAmount,
@@ -274,29 +374,27 @@ const placeOrder = async (req, res) => {
         });
       }
 
-      if (
-        offer.applicableCategory &&
-        offer.applicableCategory.toLowerCase() !== "all"
-      ) {
-        const matchesCategory = items.some((item) => {
-          const dbProduct = productMap.get(item.productId.toString());
-          const cat = (dbProduct && dbProduct.category) || item.category;
-          return (
-            cat &&
-            cat.toLowerCase() === offer.applicableCategory.toLowerCase()
-          );
-        });
+      // Reserve one use atomically so concurrent orders cannot exceed usageLimit
+      const reserved = await Offer.findOneAndUpdate(
+        {
+          _id: offer._id,
+          $or: [
+            { usageLimit: null },
+            { usageLimit: { $lte: 0 } },
+            { $expr: { $lt: ["$usedCount", "$usageLimit"] } },
+          ],
+        },
+        { $inc: { usedCount: 1 } }
+      );
 
-        if (!matchesCategory) {
-          return res.status(400).json({
-            success: false,
-            applicableCategory: offer.applicableCategory,
-            message: `Coupon code '${code}' is only applicable to ${offer.applicableCategory} collections`,
-          });
-        }
+      if (!reserved) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' has reached its maximum client usage limit`,
+        });
       }
 
-      finalDiscount = offer.calculateDiscount(subtotal);
+      finalDiscount = offer.calculateDiscount(eligibleSubtotal);
       appliedCoupon = code;
       appliedOfferId = offer._id;
     }
@@ -304,10 +402,9 @@ const placeOrder = async (req, res) => {
     const totalAmount = Math.max(0, subtotal - finalDiscount);
 
     const placedDate = new Date();
-    const trackingNumber = "ZWR-" + Math.floor(100000 + Math.random() * 900000);
     const initialTimeline = generateInitialTimeline(placedDate);
 
-    const order = await Order.create({
+    const orderData = {
       userId,
       customerName,
       phone,
@@ -319,21 +416,47 @@ const placeOrder = async (req, res) => {
       couponCode: appliedCoupon,
       totalAmount,
       status: "Order Placed",
-      trackingNumber,
       courierPartner: "Sequel Secure Luxury Logistics",
       currentLocation: "ZAWER Central Vault Hub, Mumbai",
       estimatedDelivery: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000),
       aiDeliveryInsight: AI_INSIGHTS["Order Placed"],
       timeline: initialTimeline,
-    });
+    };
+    if (idempotencyKey) orderData.idempotencyKey = idempotencyKey;
 
-    // 5. Increment coupon usage count after order is confirmed created
-    if (appliedOfferId) {
-      await Offer.updateOne({ _id: appliedOfferId }, { $inc: { usedCount: 1 } });
+    // 5. Create the order, retrying on tracking number collisions;
+    //    release the coupon reservation if it cannot be created.
+    let order = null;
+    try {
+      for (let attempt = 0; !order; attempt++) {
+        try {
+          order = await Order.create({ ...orderData, trackingNumber: newTrackingNumber() });
+        } catch (err) {
+          const trackingClash = err.code === 11000 && err.keyPattern && err.keyPattern.trackingNumber;
+          if (!trackingClash || attempt >= 4) throw err;
+        }
+      }
+    } catch (err) {
+      if (appliedOfferId) await releaseCoupon(appliedOfferId);
+      if (idempotencyKey && err.code === 11000 && err.keyPattern && err.keyPattern.idempotencyKey) {
+        const existing = await Order.findOne({ userId, idempotencyKey });
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            message: "Order placed successfully",
+            order: existing,
+          });
+        }
+      }
+      throw err;
     }
 
-    // 6. Clear cart upon successful order creation
-    await Cart.findOneAndUpdate({ userId }, { $set: { items: [] } });
+    // 6. Remove only the ordered products from the cart (keeps the rest, e.g. on Buy Now)
+    try {
+      await Cart.updateOne({ userId }, { $pull: { items: { productId: { $in: orderedIds } } } });
+    } catch (cartError) {
+      console.error("Cart cleanup after order failed:", cartError.message);
+    }
 
     return res.status(201).json({
       success: true,
@@ -392,7 +515,7 @@ const getMyOrders = async (req, res) => {
 const getOrderById = async (req, res) => {
   try {
     const orderId = req.params.id;
-    const userId = req.user ? req.user.id : null;
+    const userId = req.user && req.user.id;
 
     const order = await findOrderFlexible(orderId, userId);
 
@@ -433,7 +556,7 @@ const getOrderById = async (req, res) => {
 const getOrderTracking = async (req, res) => {
   try {
     const query = req.params.id || req.params.query;
-    const userId = req.user ? req.user.id : null;
+    const userId = req.user && req.user.id;
 
     const order = await findOrderFlexible(query, userId);
 
@@ -480,9 +603,11 @@ const getOrderTracking = async (req, res) => {
   }
 };
 
+const TERMINAL_STATUSES = ["Delivered", "Cancelled"];
+
 const updateOrderStatus = async (req, res) => {
   try {
-    if (req.user && req.user.role && req.user.role !== "admin") {
+    if (!req.user || req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
         message: "Only administrators can update order status",
@@ -509,7 +634,7 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    const order = await findOrderFlexible(orderId);
+    const order = await findOrderFlexible(orderId, null, { allUsers: true });
 
     if (!order) {
       return res.status(404).json({
@@ -518,32 +643,75 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    order.status = status;
-    order.timeline = updateTimelineForStatus(order.timeline || [], status);
-    order.aiDeliveryInsight = AI_INSIGHTS[status] || order.aiDeliveryInsight;
-
-    if (status === "Order Placed") {
-      order.currentLocation = "ZAWER Central Vault Hub, Mumbai";
-    } else if (status === "Order Confirmed") {
-      order.currentLocation = "ZAWER Central Verification Center";
-    } else if (status === "Processing") {
-      order.currentLocation = "ZAWER Diamond Studio & Vault";
-    } else if (status === "Shipped") {
-      order.currentLocation = "In Transit - Sequel Armored Division";
-    } else if (status === "Out for Delivery") {
-      order.currentLocation = "Local Delivery Hub, " + (order.address ? order.address.split(",").slice(-2).join(",").trim() : "Sector Hub");
-    } else if (status === "Delivered") {
-      order.currentLocation = order.address || "Delivered to Customer";
-    } else if (status === "Cancelled") {
-      order.currentLocation = "Order Cancelled - Refund Initiated";
+    const previousStatus = order.status;
+    if (TERMINAL_STATUSES.includes(previousStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order is already ${previousStatus} and can no longer be updated`,
+      });
     }
 
-    await order.save();
+    // Stages only move forward; Cancelled is allowed from any non-terminal stage
+    if (
+      status !== "Cancelled" &&
+      validStatuses.indexOf(status) <= validStatuses.indexOf(previousStatus)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot move order from ${previousStatus} to ${status}`,
+      });
+    }
+
+    let currentLocation = order.currentLocation;
+    if (status === "Order Placed") {
+      currentLocation = "ZAWER Central Vault Hub, Mumbai";
+    } else if (status === "Order Confirmed") {
+      currentLocation = "ZAWER Central Verification Center";
+    } else if (status === "Processing") {
+      currentLocation = "ZAWER Diamond Studio & Vault";
+    } else if (status === "Shipped") {
+      currentLocation = "In Transit - Sequel Armored Division";
+    } else if (status === "Out for Delivery") {
+      currentLocation = "Local Delivery Hub, " + (order.address ? order.address.split(",").slice(-2).join(",").trim() : "Sector Hub");
+    } else if (status === "Delivered") {
+      currentLocation = order.address || "Delivered to Customer";
+    } else if (status === "Cancelled") {
+      currentLocation = "Order Cancelled - Refund Initiated";
+    }
+
+    // Conditional on the status we read, so two concurrent updates cannot both apply
+    // (and a cancellation cannot release the coupon twice).
+    const updated = await Order.findOneAndUpdate(
+      { _id: order._id, status: previousStatus },
+      {
+        $set: {
+          status,
+          timeline: updateTimelineForStatus(order.toObject().timeline || [], status),
+          aiDeliveryInsight: AI_INSIGHTS[status] || order.aiDeliveryInsight,
+          currentLocation,
+        },
+      },
+      { returnDocument: "after", runValidators: true }
+    );
+
+    if (!updated) {
+      return res.status(409).json({
+        success: false,
+        message: "Order status changed concurrently, please retry",
+      });
+    }
+
+    if (status === "Cancelled" && updated.couponCode) {
+      await Offer.updateOne(
+        { code: updated.couponCode, usedCount: { $gt: 0 } },
+        { $inc: { usedCount: -1 } }
+      );
+    }
 
     return res.status(200).json({
       success: true,
       message: `Order status updated to ${status}`,
-      order,
+      order: updated,
     });
   } catch (error) {
     return res.status(500).json({
@@ -561,4 +729,8 @@ module.exports = {
   getOrderTracking,
   updateOrderStatus,
   findOrderFlexible,
+  priceItems,
+  eligibleSubtotalFor,
+  isAllCategories,
+  MAX_ITEM_QUANTITY,
 };

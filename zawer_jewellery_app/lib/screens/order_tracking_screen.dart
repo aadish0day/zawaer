@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/order_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
@@ -21,6 +22,7 @@ class OrderTrackingScreen extends StatefulWidget {
 class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     with SingleTickerProviderStateMixin {
   bool isLoading = true;
+  bool isAdmin = false;
   String? errorMessage;
   OrderTrackingModel? trackingData;
   late AnimationController _pulseController;
@@ -89,6 +91,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     );
 
     loadTrackingData();
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) setState(() => isAdmin = prefs.getString("userRole") == "admin");
+    });
   }
 
   @override
@@ -189,8 +194,17 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     }
   }
 
+  bool get isOrderCancelled => trackingData?.currentStatus == "Cancelled";
+
   int get currentStageIndex {
     if (trackingData == null) return 0;
+    // Cancelled isn't a stage: show the last stage actually reached
+    if (isOrderCancelled) {
+      final reached = stageMetadata.lastIndexWhere((s) => trackingData!.timeline.any(
+            (t) => t.isCompleted && t.status.toLowerCase() == s["status"].toString().toLowerCase(),
+          ));
+      return reached != -1 ? reached : 0;
+    }
     final normalized = trackingData!.currentStatus == "Placed"
         ? "Order Placed"
         : trackingData!.currentStatus;
@@ -376,11 +390,12 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.tune_rounded, size: 20, color: AppColors.gold),
-            tooltip: "Vault Simulator",
-            onPressed: showSimulationBottomSheet,
-          ),
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.tune_rounded, size: 20, color: AppColors.gold),
+              tooltip: "Vault Simulator",
+              onPressed: showSimulationBottomSheet,
+            ),
           IconButton(
             icon: const Icon(Icons.refresh, size: 20),
             tooltip: "Refresh",
@@ -438,7 +453,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                             const SizedBox(height: 16),
                             buildJewelleryPiecesCard(),
                             const SizedBox(height: 28),
-                            buildDiscreetSimulatorButton(),
+                            if (isAdmin) buildDiscreetSimulatorButton(),
                             const SizedBox(height: 36),
                           ],
                         ),
@@ -826,12 +841,12 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                 ],
               ),
               Text(
-                "${currentStageIndex + 1}/6 COMPLETED",
+                isOrderCancelled ? "CANCELLED" : "${currentStageIndex + 1}/6 COMPLETED",
                 style: AppFonts.poppins(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.2,
-                  color: AppColors.gold,
+                  color: isOrderCancelled ? const Color(0xFFC62828) : AppColors.gold,
                 ),
               ),
             ],
@@ -860,7 +875,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
               );
 
               final isCompleted = index <= currentStageIndex;
-              final isCurrent = index == currentStageIndex;
+              final isCurrent = !isOrderCancelled && index == currentStageIndex;
               final isLast = index == stageMetadata.length - 1;
 
               return Row(

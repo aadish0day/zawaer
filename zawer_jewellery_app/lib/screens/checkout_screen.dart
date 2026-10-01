@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,9 +12,14 @@ import 'offers_screen.dart';
 class CheckoutScreen extends StatefulWidget {
   final String? initialCouponCode;
 
+  // Buy Now: check out exactly these items (same shape as loaded cart items)
+  // instead of the cart. The cart is left untouched.
+  final List<Map<String, dynamic>>? buyNowItems;
+
   const CheckoutScreen({
     super.key,
     this.initialCouponCode,
+    this.buyNowItems,
   });
 
   @override
@@ -36,6 +43,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String couponErrorMessage = "";
 
   List<Map<String, dynamic>> cartItems = [];
+  String? loadError;
+
+  // One key per checkout attempt; reused across retries / double taps so the
+  // server never creates a duplicate order. Reset when the items change.
+  String? idempotencyKey;
+  String idempotencyItems = "";
 
   @override
   void initState() {
@@ -61,9 +74,31 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> loadCheckoutData() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
 
-    nameController.text = prefs.getString("userName") ?? "";
-    phoneController.text = prefs.getString("userPhone") ?? "";
-    addressController.text = prefs.getString("savedAddress") ?? "";
+    // Prefill only empty fields so a reload keeps the user's edits.
+    if (nameController.text.isEmpty) {
+      nameController.text = prefs.getString("userName") ?? "";
+    }
+    if (phoneController.text.isEmpty) {
+      phoneController.text = prefs.getString("userPhone") ?? "";
+    }
+    if (addressController.text.isEmpty) {
+      addressController.text = prefs.getString("savedAddress") ?? "";
+    }
+
+    if (widget.buyNowItems != null) {
+      setState(() {
+        cartItems = widget.buyNowItems!;
+        isLoading = false;
+      });
+      if (widget.initialCouponCode != null &&
+          widget.initialCouponCode!.trim().isNotEmpty) {
+        applyCoupon();
+      }
+      return;
+    }
+
+    final bool firstLoad = isLoading;
+    final String previousItems = itemsSignature(cartItems);
 
     final cartResult = await ApiService.getCart();
 
@@ -76,12 +111,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final productResult = await ApiService.getProducts();
       final Map<String, dynamic> productMap = {};
 
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final map = p as Map<String, dynamic>;
-          productMap[map["id"]?.toString() ?? ""] = map;
-        }
+      if (!mounted) return;
+
+      if (productResult["success"] != true) {
+        setState(() {
+          loadError = productResult["message"]?.toString() ?? "Unable to load vault pieces";
+          isLoading = false;
+        });
+        return;
+      }
+
+      final List productList = (productResult["products"] ?? []) as List;
+      for (final p in productList) {
+        final map = p as Map<String, dynamic>;
+        productMap[map["id"]?.toString() ?? ""] = map;
       }
 
       final List<Map<String, dynamic>> joined = [];
@@ -105,19 +148,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
       setState(() {
         cartItems = joined;
+        loadError = null;
         isLoading = false;
       });
 
-      if (widget.initialCouponCode != null &&
-          widget.initialCouponCode!.trim().isNotEmpty &&
-          joined.isNotEmpty) {
+      final bool itemsChanged = itemsSignature(joined) != previousItems;
+      if (joined.isNotEmpty &&
+          ((firstLoad &&
+                  widget.initialCouponCode != null &&
+                  widget.initialCouponCode!.trim().isNotEmpty) ||
+              (!firstLoad && itemsChanged && appliedCouponCode != null))) {
         applyCoupon();
       }
     } else {
       setState(() {
+        loadError = cartResult["message"]?.toString() ?? "Unable to load your cart";
         isLoading = false;
       });
     }
+  }
+
+  String itemsSignature(List<Map<String, dynamic>> items) {
+    return items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
+  }
+
+  List<Map<String, dynamic>> get couponItems {
+    return cartItems.map((item) {
+      return {"productId": item["productId"], "quantity": item["quantity"]};
+    }).toList();
   }
 
   int get itemCount {
@@ -158,25 +216,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       couponSuccessMessage = "";
     });
 
-    String? qualifyingCategory;
-    for (final item in cartItems) {
-      final cat = item["category"]?.toString();
-      if (cat != null && cat.isNotEmpty) {
-        if (code.toLowerCase().contains(cat.toLowerCase()) ||
-            (code.contains("SOLITAIRE") && cat.toLowerCase() == "ring") ||
-            (code.contains("BRIDAL") && cat.toLowerCase() == "necklace") ||
-            (code.contains("GOLD") && cat.toLowerCase() == "chain")) {
-          qualifyingCategory = cat;
-          break;
-        }
-      }
-    }
-    qualifyingCategory ??= cartItems.isNotEmpty ? cartItems.first["category"]?.toString() : null;
-
     final result = await ApiService.validateCoupon(
       code: code,
       subtotal: subtotal,
-      category: qualifyingCategory,
+      items: couponItems,
     );
 
     if (!mounted) return;
@@ -221,6 +264,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   // PLACE ORDER
   // =====================================================
   Future<void> placeOrder() async {
+    if (isPlacingOrder) return;
+
     if (cartItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Your cart is empty")),
@@ -241,6 +286,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       isPlacingOrder = true;
     });
 
+    final String currentItems = itemsSignature(cartItems);
+    if (idempotencyKey == null || idempotencyItems != currentItems) {
+      final random = Random.secure();
+      idempotencyKey = List.generate(
+        16,
+        (_) => random.nextInt(256).toRadixString(16).padLeft(2, "0"),
+      ).join();
+      idempotencyItems = currentItems;
+    }
+
     final result = await ApiService.placeOrder(
       customerName: nameController.text.trim(),
       phone: phoneController.text.trim(),
@@ -248,6 +303,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       paymentMethod: paymentMethod,
       couponCode: appliedCouponCode,
       discountAmount: appliedDiscount,
+      idempotencyKey: idempotencyKey,
       items: cartItems.map((item) {
         return {
           "productId": item["productId"],
@@ -264,7 +320,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (result["success"] == true) {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString("savedAddress", addressController.text.trim());
-      await ApiService.clearCart();
+      // The server removes the ordered items from the cart itself.
+      idempotencyKey = null;
 
       final String placedOrderId = result["order"]?["_id"]?.toString() ?? "";
 
@@ -378,6 +435,39 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       appBar: buildMaisonAppBar(isDark),
       body: isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.gold))
+          : loadError != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off_rounded, color: AppColors.gold, size: 48),
+                    const SizedBox(height: 12),
+                    Text(
+                      loadError!,
+                      textAlign: TextAlign.center,
+                      style: AppFonts.poppins(fontSize: 13, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          isLoading = true;
+                          loadError = null;
+                        });
+                        loadCheckoutData();
+                      },
+                      child: const Text("RETRY"),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -632,11 +722,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ],
           const SizedBox(height: 10),
           InkWell(
-            onTap: () {
-              Navigator.push(
+            onTap: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const OffersScreen()),
               );
+              // The cart may have changed on pushed screens; reload it.
+              if (mounted) loadCheckoutData();
             },
             child: Row(
               children: [

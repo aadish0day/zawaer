@@ -18,6 +18,11 @@ Ensure `.env` exists (copy from `.env.example` if needed):
 ```bash
 cp .env.example .env
 ```
+Then set `JWT_SECRET` to a random value of at least 32 characters; the server refuses to start otherwise:
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+`NODE_ENV=development` (the example default) returns password-reset OTPs in the API response and logs them. Never use it in production.
 
 ### 2. Start the Backend Container
 ```bash
@@ -26,10 +31,11 @@ docker compose up -d --build
 The server will be available at `http://localhost:5000`.
 
 ### 3. Optional: Run with Local MongoDB
-If you prefer running a local MongoDB instance in a container instead of MongoDB Atlas:
+If you prefer running a local MongoDB instance in a container instead of MongoDB Atlas, start the `backend-local` service (it starts `mongo` too and uses `mongodb://mongo:27017/zawer`, ignoring `MONGO_URI` from `.env`):
 ```bash
-docker compose --profile local-db up -d
+docker compose up -d --build backend-local
 ```
+Run either `backend` or `backend-local`, not both: they share host port 5000.
 
 ### 4. Stop Containers
 ```bash

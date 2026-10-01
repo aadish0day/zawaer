@@ -1,5 +1,10 @@
 const Offer = require("../models/Offer");
 const Product = require("../models/Product");
+const {
+  priceItems,
+  eligibleSubtotalFor,
+  isAllCategories,
+} = require("./orderController");
 
 // =========================================================
 // GET ALL ACTIVE OFFERS & PROMOTIONS
@@ -90,7 +95,7 @@ exports.getDiscountedProducts = async (req, res) => {
 // =========================================================
 exports.validateCoupon = async (req, res) => {
   try {
-    const { couponCode, subtotal = 0, category } = req.body;
+    const { couponCode, subtotal = 0, category, items } = req.body;
 
     if (!couponCode || typeof couponCode !== "string" || !couponCode.trim()) {
       return res.status(400).json({
@@ -100,7 +105,22 @@ exports.validateCoupon = async (req, res) => {
     }
 
     const code = couponCode.trim().toUpperCase();
-    const orderSubtotal = Number(subtotal) || 0;
+    let orderSubtotal = Number(subtotal) || 0;
+
+    // Preferred: price { productId, quantity } items from the DB so the preview matches checkout.
+    // Without items, fall back to the client-supplied subtotal/category (legacy callers).
+    let lines = null;
+    if (Array.isArray(items) && items.length > 0) {
+      const priced = await priceItems(items);
+      if (priced.error) {
+        return res.status(400).json({
+          success: false,
+          message: priced.error,
+        });
+      }
+      orderSubtotal = priced.subtotal;
+      lines = priced.lines;
+    }
 
     const offer = await Offer.findOne({ code });
 
@@ -150,21 +170,22 @@ exports.validateCoupon = async (req, res) => {
       });
     }
 
-    // Minimum Order Amount Check
-    if (orderSubtotal < offer.minOrderAmount) {
-      return res.status(400).json({
-        success: false,
-        minOrderAmount: offer.minOrderAmount,
-        message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
-      });
-    }
-
-    // Category Restriction Check
-    if (
-      offer.applicableCategory &&
-      offer.applicableCategory !== "All" &&
-      category &&
-      offer.applicableCategory.toLowerCase() !== category.toLowerCase()
+    // Category Restriction Check (eligibleSubtotal = value of matching items only)
+    let eligibleSubtotal = orderSubtotal;
+    if (lines) {
+      eligibleSubtotal = eligibleSubtotalFor(offer, lines);
+      if (!isAllCategories(offer.applicableCategory) && eligibleSubtotal <= 0) {
+        return res.status(400).json({
+          success: false,
+          applicableCategory: offer.applicableCategory,
+          message: `Code '${code}' is only applicable to ${offer.applicableCategory} collections`,
+        });
+      }
+    } else if (
+      !isAllCategories(offer.applicableCategory) &&
+      typeof category === "string" &&
+      category.trim() &&
+      offer.applicableCategory.trim().toLowerCase() !== category.trim().toLowerCase()
     ) {
       return res.status(400).json({
         success: false,
@@ -173,20 +194,17 @@ exports.validateCoupon = async (req, res) => {
       });
     }
 
-    // Calculate Discount
-    let discountAmount = 0;
-    if (offer.discountType === "percentage") {
-      const rawDiscount = (orderSubtotal * offer.discountValue) / 100;
-      if (offer.maxDiscount > 0) {
-        discountAmount = Math.min(rawDiscount, offer.maxDiscount);
-      } else {
-        discountAmount = rawDiscount;
-      }
-    } else if (offer.discountType === "flat") {
-      discountAmount = Math.min(offer.discountValue, orderSubtotal);
+    // Minimum Order Amount Check
+    if (eligibleSubtotal < offer.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        minOrderAmount: offer.minOrderAmount,
+        message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
+      });
     }
 
-    discountAmount = Math.round(discountAmount);
+    // Calculate Discount (same method checkout uses)
+    const discountAmount = offer.calculateDiscount(eligibleSubtotal);
     const finalAmount = Math.max(0, orderSubtotal - discountAmount);
 
     res.status(200).json({
@@ -201,6 +219,7 @@ exports.validateCoupon = async (req, res) => {
         maxDiscount: offer.maxDiscount,
         minOrderAmount: offer.minOrderAmount,
         subtotal: orderSubtotal,
+        eligibleSubtotal,
         finalAmount,
         savings: discountAmount,
         expiryDate: offer.expiryDate,

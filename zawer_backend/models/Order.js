@@ -162,6 +162,11 @@ const orderSchema = new mongoose.Schema(
       type: [timelineStepSchema],
       default: [],
     },
+
+    // Client-generated key so a retried checkout returns the same order
+    idempotencyKey: {
+      type: String,
+    },
   },
   {
     timestamps: true,
@@ -170,6 +175,10 @@ const orderSchema = new mongoose.Schema(
 
 orderSchema.index({ trackingNumber: 1 }, { unique: true });
 orderSchema.index({ userId: 1 });
+orderSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
+);
 
 orderSchema.pre("validate", function () {
   if (this.subtotal == null) {

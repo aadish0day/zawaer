@@ -115,7 +115,7 @@ class CartScreenState extends State<CartScreen> {
   // UPDATE QUANTITY
   // =====================================================
   Future<void> changeQuantity(int index, int newQuantity) async {
-    if (newQuantity < 1) return;
+    if (newQuantity < 1 || newQuantity > 10) return;
     HapticFeedback.selectionClick();
 
     final item = cartItems[index];

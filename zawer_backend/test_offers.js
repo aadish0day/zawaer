@@ -10,6 +10,12 @@ const orderController = require("./controllers/orderController");
 const MONGO_URI =
   process.env.MONGO_URI || "mongodb://127.0.0.1:27017/zawer_jewellery";
 
+// This suite writes real orders and coupon usage: never run it against a remote DB.
+if (!/127\.0\.0\.1|localhost/.test(MONGO_URI)) {
+  console.error("Refusing to run: MONGO_URI must point at a local MongoDB (127.0.0.1 / localhost).");
+  process.exit(1);
+}
+
 // Helper to create mock Express req and res
 function mockReqRes(body = {}, params = {}, query = {}, user = { id: "test_user_777" }) {
   const req = { body, params, query, user };

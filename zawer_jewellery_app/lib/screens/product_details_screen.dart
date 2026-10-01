@@ -4,6 +4,7 @@ import '../utils/text_styles.dart';
 import '../models/product_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import 'checkout_screen.dart';
 import 'login_screen.dart';
 
 class ProductDetailsScreen extends StatefulWidget {
@@ -27,6 +28,8 @@ int quantity = 1;
 bool isFavourite = false;
 
 bool isAddingToCart = false;
+
+bool isBuyingNow = false;
 
 int currentImage = 0;
 
@@ -624,7 +627,7 @@ const SizedBox(height: 20),
 //==========================
 
 Text(
-"â‚¹${product.price.toStringAsFixed(0)}",
+"₹${product.price.toStringAsFixed(0)}",
 style: AppFonts.poppins(
 fontSize: 30,
 fontWeight: FontWeight.bold,
@@ -705,6 +708,7 @@ fontWeight: FontWeight.bold,
 
 IconButton(
 onPressed: () {
+if (quantity >= 10) return;
 setState(() {
 quantity++;
 });
@@ -869,24 +873,39 @@ height: 55,
 
 child: OutlinedButton.icon(
 
-onPressed: () async {
+onPressed: isBuyingNow ? null : () async {
 final navigator = Navigator.of(context);
+setState(() => isBuyingNow = true);
 final token = await ApiService.getToken();
 if (!mounted) return;
 if (token.isEmpty) {
+  setState(() => isBuyingNow = false);
   showLoginPromptDialog("proceed to checkout");
   return;
 }
 
-final added = await addProductToCart();
-
-if (!mounted) return;
-
-if (added) {
-navigator.pushNamed(
-"/checkout",
+// Check out only this piece (qty 1); the cart is left untouched.
+final product = widget.product;
+await navigator.push(
+MaterialPageRoute(
+builder: (_) => CheckoutScreen(
+buyNowItems: [
+{
+"productId": product.id,
+"quantity": 1,
+"name": product.name,
+"price": product.price,
+"category": product.category,
+"image": product.images.isNotEmpty
+    ? product.images.first
+    : "assets/images/ring.png",
+},
+],
+),
+),
 );
-}
+
+if (mounted) setState(() => isBuyingNow = false);
 
 },
 

@@ -1,5 +1,5 @@
 services:
-  backend:
+  backend: &backend
     build:
       context: .
       dockerfile: Dockerfile
@@ -15,8 +15,23 @@ services:
     networks:
       - zawer_network
 
+  # Same backend, but pointed at the local mongo container below instead of
+  # the MONGO_URI in .env (Atlas users just use "backend").
+  # `environment` takes precedence over `env_file`, so .env still supplies JWT_SECRET.
+  # Run with: docker compose up -d backend-local   (starts mongo too)
+  backend-local:
+    <<: *backend
+    container_name: zawer_backend_local
+    profiles:
+      - local-db
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - MONGO_URI=mongodb://mongo:27017/zawer
+    depends_on:
+      - mongo
+
   # Optional local MongoDB service for offline / isolated development
-  # Run with: docker compose --profile local-db up
   mongo:
     image: mongo:7-jammy
     container_name: zawer_mongo
@@ -24,7 +39,7 @@ services:
     profiles:
       - local-db
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
     networks:

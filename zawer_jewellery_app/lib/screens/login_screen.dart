@@ -107,6 +107,11 @@ class _LoginScreenState extends State<LoginScreen> {
             "userPhone",
             userData["phone"]?.toString() ?? "",
           );
+
+          await prefs.setString(
+            "userRole",
+            userData["role"]?.toString() ?? "user",
+          );
         }
 
         // Remember Me
@@ -129,11 +134,15 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
 
-        // Go to Bottom Navigation
-        Navigator.pushReplacementNamed(
-          context,
-          "/bottomNav",
-        );
+        // Pushed from inside the app: return there. Root: go to Bottom Navigation.
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context, true);
+        } else {
+          Navigator.pushReplacementNamed(
+            context,
+            "/bottomNav",
+          );
+        }
 
         return;
       }
@@ -179,7 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
+      canPop: Navigator.of(context).canPop(),
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         SystemNavigator.pop();
@@ -693,6 +702,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
                       TextButton(
                         onPressed: () {
+                          if (Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                            return;
+                          }
                           Navigator
                               .pushReplacementNamed(
                             context,

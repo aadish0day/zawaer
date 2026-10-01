@@ -1,5 +1,9 @@
 const Cart = require("../models/Cart");
 const Product = require("../models/Product");
+const { MAX_ITEM_QUANTITY } = require("./orderController");
+
+const isValidQuantity = (qty) =>
+  Number.isInteger(qty) && qty >= 1 && qty <= MAX_ITEM_QUANTITY;
 
 const getCart = async (req, res) => {
   try {
@@ -45,21 +49,36 @@ const addToCart = async (req, res) => {
     }
 
     const numQty = Number(quantity);
-    if (isNaN(numQty) || numQty < 1) {
+    if (!isValidQuantity(numQty)) {
       return res.status(400).json({
         success: false,
-        message: "Quantity must be at least 1",
+        message: `Quantity must be a whole number between 1 and ${MAX_ITEM_QUANTITY}`,
       });
     }
 
     const prodIdStr = productId.toString();
 
-    // 1. Try to atomically increment quantity if the product is already in the cart
+    // 1. Try to atomically increment quantity if the product is already in the cart (capped)
     let cart = await Cart.findOneAndUpdate(
-      { userId, "items.productId": prodIdStr },
+      {
+        userId,
+        items: {
+          $elemMatch: {
+            productId: prodIdStr,
+            quantity: { $lte: MAX_ITEM_QUANTITY - numQty },
+          },
+        },
+      },
       { $inc: { "items.$.quantity": numQty } },
       { returnDocument: "after" }
     );
+
+    if (!cart && (await Cart.exists({ userId, "items.productId": prodIdStr }))) {
+      return res.status(400).json({
+        success: false,
+        message: `You can add at most ${MAX_ITEM_QUANTITY} of this item`,
+      });
+    }
 
     // 2. If the product was not in the cart (or cart does not exist), push item and upsert
     if (!cart) {
@@ -98,10 +117,10 @@ const updateCartQuantity = async (req, res) => {
     const productId = req.params.productId;
     const quantity = Number(req.body.quantity);
 
-    if (!quantity || quantity < 1) {
+    if (!isValidQuantity(quantity)) {
       return res.status(400).json({
         success: false,
-        message: "Quantity must be at least 1",
+        message: `Quantity must be a whole number between 1 and ${MAX_ITEM_QUANTITY}`,
       });
     }
 

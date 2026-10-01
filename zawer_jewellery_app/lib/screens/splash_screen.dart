@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/text_styles.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/api_service.dart';
 import '../utils/colors.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -31,8 +32,22 @@ class _SplashScreenState extends State<SplashScreen> {
     final SharedPreferences prefs =
     await SharedPreferences.getInstance();
 
-    final String token =
+    String token =
         prefs.getString("token") ?? "";
+
+    // Verify the saved session. A 401 clears stored auth inside ApiService;
+    // network errors keep the saved session (offline tolerance).
+    if (token.isNotEmpty) {
+      final profile = await ApiService.getProfile();
+      if (profile["statusCode"] == 401) {
+        token = "";
+      } else if (profile["success"] == true && profile["user"] is Map) {
+        await prefs.setString(
+          "userRole",
+          profile["user"]["role"]?.toString() ?? "user",
+        );
+      }
+    }
 
     if (!mounted) return;
 

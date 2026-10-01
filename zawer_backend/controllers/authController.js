@@ -1,6 +1,12 @@
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+
+const MAX_OTP_ATTEMPTS = 5;
+
+const hashOtp = (otp) =>
+  crypto.createHash("sha256").update(otp).digest("hex");
 
 const registerUser = async (req, res) => {
   try {
@@ -108,6 +114,7 @@ const loginUser = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        role: user.role,
       },
     });
   } catch (error) {
@@ -140,6 +147,7 @@ const getProfile = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        role: user.role,
       },
     });
   } catch (error) {
@@ -206,31 +214,27 @@ const forgotPassword = async (req, res) => {
       email: email.toLowerCase().trim(),
     });
 
+    // Same response whether or not the account exists (no email enumeration)
+    const responsePayload = {
+      success: true,
+      message: "If an account exists for this email, an OTP has been sent",
+    };
+
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "No account found with this email",
-      });
+      return res.status(200).json(responsePayload);
     }
 
-    const otp = Math.floor(
-      100000 + Math.random() * 900000
-    ).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
-    user.otpCode = otp;
+    user.otpCode = hashOtp(otp);
     user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    user.otpAttempts = 0;
 
     await user.save();
 
-    console.log(`[AUTH] Reset OTP for ${email}: ${otp}`);
-
-    const isProduction = process.env.NODE_ENV === "production";
-    const responsePayload = {
-      success: true,
-      message: "OTP sent to registered email",
-    };
-
-    if (!isProduction) {
+    // Explicit opt-in only: never expose the OTP unless NODE_ENV=development
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[AUTH] Reset OTP for ${user.email}: ${otp}`);
       responsePayload.devOtp = otp;
     }
 
@@ -267,7 +271,7 @@ const resetPassword = async (req, res) => {
 
     if (
       !user ||
-      user.otpCode !== String(otp).trim() ||
+      !user.otpCode ||
       !user.otpExpiry ||
       user.otpExpiry < new Date()
     ) {
@@ -277,9 +281,38 @@ const resetPassword = async (req, res) => {
       });
     }
 
+    if (user.otpCode !== hashOtp(String(otp).trim())) {
+      // Atomic increment so parallel guesses can't skip past the limit
+      const updated = await User.findOneAndUpdate(
+        { _id: user._id, otpCode: user.otpCode },
+        { $inc: { otpAttempts: 1 } },
+        { returnDocument: "after" }
+      );
+
+      if (updated && updated.otpAttempts >= MAX_OTP_ATTEMPTS) {
+        await User.updateOne(
+          { _id: user._id, otpCode: user.otpCode },
+          { otpCode: "", otpExpiry: null, otpAttempts: 0 }
+        );
+
+        return res.status(429).json({
+          success: false,
+          message:
+            "Too many incorrect attempts. Please request a new OTP",
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP",
+      });
+    }
+
     user.password = await bcrypt.hash(newPassword, 10);
+    user.passwordChangedAt = new Date();
     user.otpCode = "";
     user.otpExpiry = null;
+    user.otpAttempts = 0;
 
     await user.save();
 
