@@ -18,6 +18,8 @@ class WishlistScreen extends StatefulWidget {
 class WishlistScreenState extends State<WishlistScreen> {
   bool isLoading = true;
   bool isGuest = false;
+  // Non-empty when the last load failed (other than 401).
+  String errorMessage = "";
   List<Map<String, dynamic>> wishlist = [];
   bool isMovingAll = false;
 
@@ -46,6 +48,7 @@ class WishlistScreenState extends State<WishlistScreen> {
         setState(() {
           isGuest = true;
           isLoading = false;
+          errorMessage = "";
           wishlist = [];
         });
         return;
@@ -54,7 +57,7 @@ class WishlistScreenState extends State<WishlistScreen> {
       if (wishResult["success"] != true) {
         setState(() {
           isLoading = false;
-          wishlist = [];
+          errorMessage = wishResult["message"]?.toString() ?? "Failed to load wishlist";
         });
         return;
       }
@@ -85,13 +88,14 @@ class WishlistScreenState extends State<WishlistScreen> {
       setState(() {
         wishlist = joined;
         isGuest = false;
+        errorMessage = "";
         isLoading = false;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         isLoading = false;
-        wishlist = [];
+        errorMessage = "Failed to load wishlist";
       });
     }
   }
@@ -334,6 +338,8 @@ class WishlistScreenState extends State<WishlistScreen> {
             )
           : isGuest
               ? buildGuestView(isDark)
+              : errorMessage.isNotEmpty
+                  ? buildErrorView(isDark)
               : wishlist.isEmpty
                   ? buildEmptyView(isDark)
                   : RefreshIndicator(
@@ -876,6 +882,41 @@ class WishlistScreenState extends State<WishlistScreen> {
                   letterSpacing: 1.2,
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildErrorView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 54, color: Colors.redAccent),
+            const SizedBox(height: 16),
+            Text(
+              "Unable to Load Wishlist",
+              style: AppFonts.cinzel(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              errorMessage,
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: loadWishlist,
+              child: const Text("RETRY CONNECTION"),
             ),
           ],
         ),

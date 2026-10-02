@@ -19,7 +19,18 @@ class ApiService {
   static Future<Map<String, dynamic>> _handleResponse(
     http.Response response,
   ) async {
-    final dynamic decoded = jsonDecode(response.body);
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } on FormatException {
+      // Proxy error pages (502/504 HTML) or empty bodies: the server was
+      // reached, so don't report it as a connection failure.
+      return {
+        "statusCode": response.statusCode,
+        "success": false,
+        "message": "Server error (${response.statusCode}). Please try again.",
+      };
+    }
 
     if (decoded is Map<String, dynamic>) {
       return {

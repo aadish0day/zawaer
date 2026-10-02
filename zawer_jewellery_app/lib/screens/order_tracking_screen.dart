@@ -228,6 +228,37 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     return idx != -1 ? idx : 0;
   }
 
+  // Only forward moves, plus cancel while the order is still open.
+  List<Map<String, dynamic>> get simulatorOptions {
+    final status = trackingData?.currentStatus ?? "";
+    if (isOrderCancelled || status == "Delivered") return const [];
+    return [
+      ...stageMetadata.skip(currentStageIndex + 1),
+      {"status": "Cancelled", "icon": Icons.cancel_outlined},
+    ];
+  }
+
+  Future<bool> _confirmCancel(BuildContext ctx) async {
+    final confirmed = await showDialog<bool>(
+      context: ctx,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Cancel this order?"),
+        content: const Text("Cancelling is final and cannot be undone."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text("Keep Order"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text("Cancel Order", style: TextStyle(color: Color(0xFFC62828))),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
   void showSimulationBottomSheet() {
     showModalBottomSheet(
       context: context,
@@ -289,57 +320,59 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                   ],
                 ),
                 const SizedBox(height: 20),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: stageMetadata.map((stage) {
-                    final stageName = stage["status"] as String;
-                    final isSelected =
-                        trackingData?.currentStatus.toLowerCase() == stageName.toLowerCase();
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        advanceToStatus(stageName);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppColors.gold
-                              : (isDark ? const Color(0xFF222228) : const Color(0xFFF7F5F0)),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.gold
-                                : (isDark ? Colors.white12 : Colors.black12),
+                if (simulatorOptions.isEmpty)
+                  Text(
+                    "This order is final; no further status changes.",
+                    style: AppFonts.poppins(fontSize: 12, color: Colors.grey),
+                  )
+                else
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: simulatorOptions.map((stage) {
+                      final stageName = stage["status"] as String;
+                      final isCancel = stageName == "Cancelled";
+                      final accent = isCancel ? const Color(0xFFC62828) : AppColors.gold;
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () async {
+                          if (isCancel && !await _confirmCancel(ctx)) return;
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          advanceToStatus(stageName);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF222228) : const Color(0xFFF7F5F0),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: isCancel
+                                  ? accent.withValues(alpha: 0.5)
+                                  : (isDark ? Colors.white12 : Colors.black12),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(stage["icon"] as IconData, size: 14, color: accent),
+                              const SizedBox(width: 6),
+                              Text(
+                                stageName,
+                                style: AppFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: isCancel
+                                      ? accent
+                                      : (isDark ? Colors.white : Colors.black87),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              stage["icon"] as IconData,
-                              size: 14,
-                              color: isSelected ? Colors.black : AppColors.gold,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              stageName,
-                              style: AppFonts.poppins(
-                                fontSize: 12,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                color: isSelected
-                                    ? Colors.black
-                                    : (isDark ? Colors.white : Colors.black87),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
+                      );
+                    }).toList(),
+                  ),
                 const SizedBox(height: 16),
               ],
             ),

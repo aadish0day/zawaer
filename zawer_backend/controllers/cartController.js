@@ -1,18 +1,21 @@
 const mongoose = require("mongoose");
 const Cart = require("../models/Cart");
 const Product = require("../models/Product");
-const { MAX_ITEM_QUANTITY } = require("./orderController");
+const { MAX_ITEM_QUANTITY, MAX_ORDER_LINES } = require("./orderController");
+
+const CART_FULL = Symbol("cartFull");
 
 const isValidQuantity = (qty) =>
   Number.isInteger(qty) && qty >= 1 && qty <= MAX_ITEM_QUANTITY;
 
 // Concurrent upserts on the unique userId can lose with E11000; the retry sees the winner's doc.
-const retryOnDuplicate = async (fn) => {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error.code !== 11000) throw error;
-    return fn();
+const retryOnDuplicate = async (fn, retries = 3) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error.code !== 11000 || attempt >= retries) throw error;
+    }
   }
 };
 
@@ -145,10 +148,23 @@ const addToCart = async (req, res) => {
       });
       if (overCap) return null;
 
-      // 2. Push only if the line is still absent. If another request added it meanwhile,
-      // the filter misses, the upsert hits the unique userId (E11000) and we retry.
+      // A new line can't go past MAX_ORDER_LINES distinct pieces (checkout's limit)
+      const full = await Cart.exists({
+        userId,
+        [`items.${MAX_ORDER_LINES - 1}`]: { $exists: true },
+        "items.productId": { $ne: prodIdStr },
+      });
+      if (full) return CART_FULL;
+
+      // 2. Push only if the line is still absent and the cart has room. If another request
+      // changed that meanwhile, the filter misses, the upsert hits the unique userId (E11000)
+      // and we retry, which re-runs the checks above.
       return Cart.findOneAndUpdate(
-        { userId, "items.productId": { $ne: prodIdStr } },
+        {
+          userId,
+          "items.productId": { $ne: prodIdStr },
+          [`items.${MAX_ORDER_LINES - 1}`]: { $exists: false },
+        },
         { $push: { items: { productId: prodIdStr, quantity: numQty } } },
         { returnDocument: "after", upsert: true }
       );
@@ -158,6 +174,13 @@ const addToCart = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `You can add at most ${MAX_ITEM_QUANTITY} of this item`,
+      });
+    }
+
+    if (cart === CART_FULL) {
+      return res.status(400).json({
+        success: false,
+        message: `Your bag can hold at most ${MAX_ORDER_LINES} different pieces`,
       });
     }
 

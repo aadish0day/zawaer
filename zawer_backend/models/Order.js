@@ -181,7 +181,12 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
-orderSchema.index({ trackingNumber: 1 }, { unique: true });
+// Partial: only real tracking numbers are unique, so legacy orders without one can coexist.
+// An existing non-partial trackingNumber_1 index must be dropped by hand; Mongoose won't replace it.
+orderSchema.index(
+  { trackingNumber: 1 },
+  { unique: true, partialFilterExpression: { trackingNumber: { $type: "string", $gt: "" } } }
+);
 orderSchema.index({ userId: 1 });
 orderSchema.index(
   { userId: 1, idempotencyKey: 1 },

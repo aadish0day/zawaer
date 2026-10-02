@@ -5,9 +5,50 @@ const {
   priceItems,
   eligibleSubtotalFor,
   isAllCategories,
+  round2,
 } = require("./orderController");
 
 const MAX_ITEMS = 50;
+
+// Public shape shared by the list and single-offer endpoints (no usage internals).
+// A missing expiryDate means no expiry.
+const formatOffer = (offer, now = new Date()) => {
+  const hasExpiry = offer.expiryDate instanceof Date;
+  const isExpired = offer.isExpired();
+  const msRemaining = hasExpiry ? Math.max(0, offer.expiryDate.getTime() - now.getTime()) : null;
+  const daysRemaining = hasExpiry ? Math.floor(msRemaining / (1000 * 60 * 60 * 24)) : null;
+  const hoursRemaining = hasExpiry
+    ? Math.floor((msRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    : null;
+
+  const isValid =
+    offer.isActive &&
+    !isExpired &&
+    !(offer.startDate && now < offer.startDate) &&
+    // null / <= 0 = unlimited, same as checkout
+    (!(offer.usageLimit > 0) || offer.usedCount < offer.usageLimit);
+
+  return {
+    id: offer._id,
+    code: offer.code,
+    title: offer.title,
+    description: offer.description,
+    discountType: offer.discountType,
+    discountValue: offer.discountValue,
+    maxDiscount: offer.maxDiscount,
+    minOrderAmount: offer.minOrderAmount,
+    applicableCategory: offer.applicableCategory,
+    startDate: offer.startDate,
+    expiryDate: offer.expiryDate ?? null,
+    isExpired,
+    daysRemaining,
+    hoursRemaining,
+    isValid,
+    tag: offer.tag,
+    bannerImage: offer.bannerImage,
+    terms: offer.terms,
+  };
+};
 
 // =========================================================
 // GET ALL ACTIVE OFFERS & PROMOTIONS
@@ -17,43 +58,7 @@ exports.getAllOffers = async (req, res) => {
     const now = new Date();
     const offers = await Offer.find({ isActive: true }).sort({ createdAt: -1 });
 
-    const formattedOffers = offers.map((offer) => {
-      const isExpired = now > offer.expiryDate;
-      const msRemaining = Math.max(0, offer.expiryDate.getTime() - now.getTime());
-      const daysRemaining = Math.floor(msRemaining / (1000 * 60 * 60 * 24));
-      const hoursRemaining = Math.floor(
-        (msRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-      );
-
-      const isValid =
-        offer.isActive &&
-        !isExpired &&
-        !(offer.startDate && now < offer.startDate) &&
-        // null / <= 0 = unlimited, same as checkout
-        (!(offer.usageLimit > 0) || offer.usedCount < offer.usageLimit);
-
-      return {
-        id: offer._id,
-        code: offer.code,
-        title: offer.title,
-        description: offer.description,
-        discountType: offer.discountType,
-        discountValue: offer.discountValue,
-        maxDiscount: offer.maxDiscount,
-        minOrderAmount: offer.minOrderAmount,
-        applicableCategory: offer.applicableCategory,
-        startDate: offer.startDate,
-        expiryDate: offer.expiryDate,
-        isExpired,
-        daysRemaining,
-        hoursRemaining,
-        isValid,
-        tag: offer.tag,
-        bannerImage: offer.bannerImage,
-        terms: offer.terms,
-        usedCount: offer.usedCount,
-      };
-    });
+    const formattedOffers = offers.map((offer) => formatOffer(offer, now));
 
     res.status(200).json({
       success: true,
@@ -153,8 +158,8 @@ exports.validateCoupon = async (req, res) => {
 
     const now = new Date();
 
-    // Expiry Check
-    if (now > offer.expiryDate) {
+    // Expiry Check (missing expiryDate = no expiry, same as checkout)
+    if (offer.isExpired()) {
       const expStr = offer.expiryDate.toLocaleDateString("en-IN", {
         day: "2-digit",
         month: "short",
@@ -232,8 +237,10 @@ exports.validateCoupon = async (req, res) => {
     }
 
     // Calculate Discount (same method checkout uses)
-    const discountAmount = offer.calculateDiscount(eligibleSubtotal);
-    const finalAmount = Math.max(0, orderSubtotal - discountAmount);
+    const discountAmount = round2(offer.calculateDiscount(eligibleSubtotal));
+    const finalAmount = round2(Math.max(0, orderSubtotal - discountAmount));
+    orderSubtotal = round2(orderSubtotal);
+    eligibleSubtotal = round2(eligibleSubtotal);
 
     res.status(200).json({
       success: true,
@@ -250,7 +257,7 @@ exports.validateCoupon = async (req, res) => {
         eligibleSubtotal,
         finalAmount,
         savings: discountAmount,
-        expiryDate: offer.expiryDate,
+        expiryDate: offer.expiryDate ?? null,
       },
     });
   } catch (error) {
@@ -268,7 +275,7 @@ exports.validateCoupon = async (req, res) => {
 exports.getOfferByCode = async (req, res) => {
   try {
     const code = req.params.code.trim().toUpperCase();
-    const offer = await Offer.findOne({ code });
+    const offer = await Offer.findOne({ code, isActive: true });
 
     if (!offer) {
       return res.status(404).json({
@@ -277,15 +284,9 @@ exports.getOfferByCode = async (req, res) => {
       });
     }
 
-    const now = new Date();
-    const isExpired = now > offer.expiryDate;
-
     res.status(200).json({
       success: true,
-      offer: {
-        ...offer.toObject(),
-        isExpired,
-      },
+      offer: formatOffer(offer),
     });
   } catch (error) {
     console.error("Get Offer Error:", error);

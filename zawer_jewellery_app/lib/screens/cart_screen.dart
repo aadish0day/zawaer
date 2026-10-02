@@ -32,9 +32,21 @@ class CartScreenState extends State<CartScreen> {
   // =====================================================
   // LOAD CART FROM BACKEND (MongoDB)
   // =====================================================
+  // Bumped when a load starts and when a cart mutation completes; a load only
+  // applies its result if its token is still current, so a slow or
+  // pre-mutation GET can't overwrite newer state.
+  int _loadToken = 0;
+
+  void _mutationCompleted() {
+    _loadToken++;
+    // A load in flight is now stale; replace it so the spinner can't stick.
+    if (mounted && isLoading) loadCart();
+  }
+
   Future<void> loadCart() async {
     // Called from route-pop callbacks, which may fire after dispose.
     if (!mounted) return;
+    final int token = ++_loadToken;
     setState(() {
       isLoading = true;
       errorMessage = "";
@@ -43,7 +55,7 @@ class CartScreenState extends State<CartScreen> {
     try {
       final cartResult = await ApiService.getCart();
 
-      if (!mounted) return;
+      if (!mounted || token != _loadToken) return;
 
       if (cartResult["statusCode"] == 401) {
         setState(() {
@@ -82,6 +94,7 @@ class CartScreenState extends State<CartScreen> {
         final product = Product.fromJson(rawProduct);
 
         final String productId = item["productId"]?.toString() ?? product.id;
+        if (_pendingRemovals.contains(productId)) continue;
         joined.add({
           "productId": productId,
           "quantity": pendingQty[productId] ?? (item["quantity"] as num?)?.toInt() ?? 1,
@@ -103,7 +116,7 @@ class CartScreenState extends State<CartScreen> {
         isLoading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || token != _loadToken) return;
       setState(() {
         isLoading = false;
         errorMessage = "Unable to connect to Maison Vault server";
@@ -120,7 +133,9 @@ class CartScreenState extends State<CartScreen> {
   // Loops keep running after dispose so pending quantities are never dropped.
   final Map<String, int> _desiredQty = {};
   final Map<String, Future<void>> _qtySyncs = {};
+  final Set<String> _pendingRemovals = {};
   bool isWaitingForSync = false;
+  bool _checkoutInFlight = false;
 
   void changeQuantity(int index, int newQuantity) {
     if (newQuantity < 1 || newQuantity > 10) return;
@@ -145,6 +160,7 @@ class CartScreenState extends State<CartScreen> {
           productId: productId,
           quantity: quantity,
         );
+        _mutationCompleted();
 
         if (result["success"] != true) {
           _desiredQty.remove(productId);
@@ -171,7 +187,10 @@ class CartScreenState extends State<CartScreen> {
       _qtySyncs.remove(productId);
     }
 
-    if (failure != null && mounted) {
+    // An item removed meanwhile (e.g. a 404 after its DELETE) needs no error.
+    final bool removed = _pendingRemovals.contains(productId) ||
+        !cartItems.any((i) => i["productId"].toString() == productId);
+    if (failure != null && mounted && !removed) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -184,25 +203,36 @@ class CartScreenState extends State<CartScreen> {
   }
 
   Future<void> proceedToCheckout() async {
-    if (isWaitingForSync) return;
-    HapticFeedback.mediumImpact();
+    // Ignore further taps until the checkout route returns.
+    if (_checkoutInFlight) return;
+    _checkoutInFlight = true;
+    try {
+      HapticFeedback.mediumImpact();
 
-    if (_qtySyncs.isNotEmpty) {
-      setState(() => isWaitingForSync = true);
-      while (_qtySyncs.isNotEmpty) {
-        await Future.wait(_qtySyncs.values.toList());
+      if (_qtySyncs.isNotEmpty) {
+        setState(() => isWaitingForSync = true);
+        try {
+          while (_qtySyncs.isNotEmpty) {
+            await Future.wait(_qtySyncs.values.toList());
+          }
+        } catch (_) {
+          // Checkout reloads the cart from the server, so it shows the truth.
+        } finally {
+          if (mounted) setState(() => isWaitingForSync = false);
+        }
       }
       if (!mounted) return;
-      setState(() => isWaitingForSync = false);
-    }
 
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
-      ),
-    );
-    loadCart();
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
+        ),
+      );
+      loadCart();
+    } finally {
+      _checkoutInFlight = false;
+    }
   }
 
   // =====================================================
@@ -211,15 +241,28 @@ class CartScreenState extends State<CartScreen> {
   Future<void> removeItem(int index) async {
     HapticFeedback.lightImpact();
     final item = cartItems[index];
-    _desiredQty.remove(item["productId"].toString());
+    final String productId = item["productId"].toString();
+    _desiredQty.remove(productId);
+    _pendingRemovals.add(productId);
 
     setState(() {
       cartItems.removeAt(index);
     });
 
-    final result = await ApiService.removeFromCart(
-      item["productId"].toString(),
-    );
+    final Map<String, dynamic> result;
+    try {
+      // Let an in-flight PUT finish first so it can't land after the DELETE.
+      final pendingSync = _qtySyncs[productId];
+      if (pendingSync != null) {
+        try {
+          await pendingSync;
+        } catch (_) {}
+      }
+      result = await ApiService.removeFromCart(productId);
+    } finally {
+      _pendingRemovals.remove(productId);
+    }
+    _mutationCompleted();
 
     if (!mounted) return;
 
@@ -587,7 +630,9 @@ class CartScreenState extends State<CartScreen> {
                           children: [
                             InkWell(
                               borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
-                              onTap: () => changeQuantity(index, quantity - 1),
+                              onTap: () => quantity == 1
+                                  ? removeItem(index)
+                                  : changeQuantity(index, quantity - 1),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                 child: Icon(

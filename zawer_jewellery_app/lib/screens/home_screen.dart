@@ -90,42 +90,69 @@ class HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Bumped per request; a response whose number is no longer current is
+  // stale (a newer refresh started) and is dropped.
+  int _productsRequestSeq = 0;
+  int _wishlistRequestSeq = 0;
+
   Future<void> loadProducts() async {
+    final int seq = ++_productsRequestSeq;
     setState(() {
       isLoadingProducts = true;
     });
 
     // The API is paginated: walk every page (capped so a bad `pages` value
-    // can't loop forever).
-    final List productList = [];
+    // can't loop forever). Keyed by id so an item shifting between pages
+    // mid-walk isn't shown twice.
+    final Map<String, Product> byId = {};
     Map<String, dynamic> result = const {};
     for (int page = 1; page <= 20; page++) {
       result = await ApiService.getProducts(page: page, limit: 100);
+      if (seq != _productsRequestSeq) return;
       if (result["success"] != true) break;
-      productList.addAll((result["products"] ?? []) as List);
+      for (final p in (result["products"] ?? []) as List) {
+        final product = Product.fromJson(p as Map<String, dynamic>);
+        byId.putIfAbsent(product.id, () => product);
+      }
       final int pages = (result["pages"] as num?)?.toInt() ?? page;
       if (page >= pages) break;
     }
 
-    if (!mounted) return;
+    if (!mounted || seq != _productsRequestSeq) return;
 
-    if (result["success"] == true || productList.isNotEmpty) {
-      setState(() {
-        apiProducts = productList
-            .map((p) => Product.fromJson(p as Map<String, dynamic>))
-            .toList();
-        isLoadingProducts = false;
-      });
-    } else {
-      setState(() {
-        isLoadingProducts = false;
-      });
+    final bool failed = result["success"] != true;
+    setState(() {
+      // On failure keep whatever we have rather than blanking the catalog.
+      if (!failed || byId.isNotEmpty) apiProducts = byId.values.toList();
+      isLoadingProducts = false;
+    });
+
+    if (failed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 6),
+          content: Text(
+            byId.isEmpty
+                ? (result["message"]?.toString() ?? "Could not load the collection")
+                : "Some products could not be loaded. The collection may be incomplete.",
+            style: AppFonts.poppins(fontSize: 12.5, color: Colors.white),
+          ),
+          action: SnackBarAction(
+            label: "RETRY",
+            textColor: Colors.white,
+            onPressed: loadProducts,
+          ),
+        ),
+      );
     }
   }
 
   Future<void> loadWishlistState() async {
+    final int seq = ++_wishlistRequestSeq;
     final result = await ApiService.getWishlist();
-    if (!mounted) return;
+    if (!mounted || seq != _wishlistRequestSeq) return;
     if (result["statusCode"] == 401) {
       // Signed out: clear stale hearts.
       setState(() => wishlistedIds = {});

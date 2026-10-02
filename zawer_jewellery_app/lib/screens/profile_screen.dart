@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../utils/colors.dart';
 import '../utils/text_styles.dart';
 import '../utils/theme_controller.dart';
+import '../utils/validators.dart';
 import 'login_screen.dart';
 import 'orders_screen.dart';
 import 'order_tracking_screen.dart';
@@ -154,11 +155,13 @@ class ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     TextFormField(
                       controller: nameController,
+                      maxLength: maxNameLength,
                       validator: (value) =>
                           (value == null || value.trim().isEmpty) ? "Name is required" : null,
                       style: AppFonts.poppins(fontSize: 13.5),
                       decoration: InputDecoration(
                         labelText: "Full Name",
+                        counterText: "",
                         prefixIcon: const Icon(Icons.person_outline, color: AppColors.gold),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                       ),
@@ -167,16 +170,18 @@ class ProfileScreenState extends State<ProfileScreen> {
                     TextFormField(
                       controller: phoneController,
                       keyboardType: TextInputType.phone,
+                      maxLength: maxPhoneLength,
                       validator: (value) {
                         final phone = value?.trim() ?? "";
-                        if (phone.isNotEmpty && !RegExp(r'^\d{10,15}$').hasMatch(phone)) {
-                          return "Enter 10-15 digits";
+                        if (phone.isNotEmpty && !isValidPhone(phone)) {
+                          return "Enter a valid phone number";
                         }
                         return null;
                       },
                       style: AppFonts.poppins(fontSize: 13.5),
                       decoration: InputDecoration(
                         labelText: "Phone Number",
+                        counterText: "",
                         prefixIcon: const Icon(Icons.phone_outlined, color: AppColors.gold),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                       ),
@@ -201,23 +206,28 @@ class ProfileScreenState extends State<ProfileScreen> {
                           HapticFeedback.selectionClick();
                           // Page-level messenger: the dialog's own context is gone after pop.
                           final messenger = ScaffoldMessenger.of(this.context);
+                          // Read before awaiting: the controllers are disposed
+                          // if the dialog is dismissed mid-save.
+                          final String name = nameController.text.trim();
+                          final String phone = phoneController.text.trim();
                           setDialogState(() {
                             isSaving = true;
                           });
 
                           final result = await ApiService.updateProfile(
-                            name: nameController.text.trim(),
-                            phone: phoneController.text.trim(),
+                            name: name,
+                            phone: phone,
                           );
 
                           if (result["success"] == true) {
                             final SharedPreferences prefs = await SharedPreferences.getInstance();
-                            await prefs.setString("userName", nameController.text.trim());
-                            await prefs.setString("userPhone", phoneController.text.trim());
+                            await prefs.setString("userName", name);
+                            await prefs.setString("userPhone", phone);
                           }
 
-                          if (!dialogContext.mounted) return;
-                          Navigator.pop(dialogContext);
+                          // The dialog may already be gone (back / tap outside);
+                          // the screen still needs the reload and the snackbar.
+                          if (dialogContext.mounted) Navigator.pop(dialogContext);
 
                           if (!mounted) return;
 

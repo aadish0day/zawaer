@@ -3,6 +3,10 @@ const Order = require("../models/Order");
 const Product = require("../models/Product");
 const Cart = require("../models/Cart");
 const Offer = require("../models/Offer");
+const { PHONE_RE } = require("./authController");
+
+const round2 = (x) => Math.round(x * 100) / 100;
+const IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const TRACKING_STAGES = [
   {
@@ -307,6 +311,9 @@ const placeOrder = async (req, res) => {
       }
       contact[field] = value.trim();
     }
+    if (!PHONE_RE.test(contact.phone)) {
+      return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
+    }
 
     if (couponCode != null && typeof couponCode !== "string") {
       return res.status(400).json({ success: false, message: "couponCode must be a string" });
@@ -326,16 +333,21 @@ const placeOrder = async (req, res) => {
       });
     }
 
+    // Replays an order already created for this key, if it is recent enough. The unique
+    // index keeps an old key from ever being reused, so the client must regenerate it.
+    const replay = (existing) =>
+      Date.now() - new Date(existing.createdAt).getTime() <= IDEMPOTENCY_WINDOW_MS
+        ? res.status(200).json({ success: true, message: "Order placed successfully", order: existing })
+        : res.status(409).json({
+            success: false,
+            idempotencyConflict: true,
+            message: "This checkout session has expired. Please try again.",
+          });
+
     // 0. Retried checkout: return the order already created for this key
     if (idempotencyKey) {
       const existing = await Order.findOne({ userId, idempotencyKey });
-      if (existing) {
-        return res.status(200).json({
-          success: true,
-          message: "Order placed successfully",
-          order: existing,
-        });
-      }
+      if (existing) return replay(existing);
     }
 
     // 1-3. Validate quantities and price every item strictly from the DB
@@ -346,7 +358,8 @@ const placeOrder = async (req, res) => {
         message: priced.error,
       });
     }
-    const { subtotal, verifiedItems, lines, orderedIds } = priced;
+    const { verifiedItems, lines, orderedIds } = priced;
+    const subtotal = round2(priced.subtotal);
 
     // 4. Strict coupon validation
     let finalDiscount = 0;
@@ -375,7 +388,8 @@ const placeOrder = async (req, res) => {
 
       const now = new Date();
 
-      if (offer.isExpired() || now > offer.expiryDate) {
+      // Missing expiryDate = no expiry (same as validate-coupon and the offers list)
+      if (offer.isExpired()) {
         return res.status(400).json({
           success: false,
           couponError: true,
@@ -459,12 +473,12 @@ const placeOrder = async (req, res) => {
         });
       }
 
-      finalDiscount = offer.calculateDiscount(eligibleSubtotal);
+      finalDiscount = round2(offer.calculateDiscount(eligibleSubtotal));
       appliedCoupon = code;
       appliedOfferId = offer._id;
     }
 
-    const totalAmount = Math.max(0, subtotal - finalDiscount);
+    const totalAmount = round2(Math.max(0, subtotal - finalDiscount));
 
     const placedDate = new Date();
     const initialTimeline = generateInitialTimeline(placedDate);
@@ -503,13 +517,7 @@ const placeOrder = async (req, res) => {
       if (appliedOfferId) await releaseCoupon(appliedOfferId);
       if (idempotencyKey && err.code === 11000 && err.keyPattern && err.keyPattern.idempotencyKey) {
         const existing = await Order.findOne({ userId, idempotencyKey });
-        if (existing) {
-          return res.status(200).json({
-            success: true,
-            message: "Order placed successfully",
-            order: existing,
-          });
-        }
+        if (existing) return replay(existing);
       }
       throw err;
     }
@@ -817,5 +825,7 @@ module.exports = {
   priceItems,
   eligibleSubtotalFor,
   isAllCategories,
+  round2,
   MAX_ITEM_QUANTITY,
+  MAX_ORDER_LINES,
 };

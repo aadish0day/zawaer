@@ -159,7 +159,8 @@ Future<void> fetchReviews() async {
 // SUBMIT REVIEW
 // =====================================================
 
-Future<void> submitReview({
+// Returns null on success, else the error to show in the review dialog.
+Future<String?> submitReview({
   required int rating,
   required String comment,
 }) async {
@@ -173,31 +174,24 @@ Future<void> submitReview({
     comment: comment,
   );
 
-  if (!mounted) return;
+  if (!mounted) return null;
 
   setState(() {
     isSubmittingReview = false;
   });
 
-  if (result["success"] == true) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Review submitted successfully"),
-        backgroundColor: Colors.green,
-      ),
-    );
-    fetchReviews();
-  } else {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          result["message"]?.toString() ??
-              "Could not submit review",
-        ),
-        backgroundColor: Colors.red,
-      ),
-    );
+  if (result["success"] != true) {
+    return result["message"]?.toString() ?? "Could not submit review";
   }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text("Review submitted successfully"),
+      backgroundColor: Colors.green,
+    ),
+  );
+  fetchReviews();
+  return null;
 }
 
 // =====================================================
@@ -206,6 +200,7 @@ Future<void> submitReview({
 
 void showReviewDialog() {
   int selectedRating = 0;
+  String? reviewError;
   final commentController = TextEditingController();
 
   showDialog(
@@ -257,8 +252,11 @@ void showReviewDialog() {
                   controller: commentController,
                   maxLines: 4,
                   minLines: 3,
+                  maxLength: 1000,
                   decoration: InputDecoration(
                     hintText: "Write your review...",
+                    errorText: reviewError,
+                    errorMaxLines: 3,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
@@ -282,21 +280,24 @@ void showReviewDialog() {
                 onPressed: isSubmittingReview || selectedRating == 0
                     ? null
                     : () async {
-                        Navigator.pop(dialogContext);
-                        if (commentController.text.trim().isNotEmpty) {
-                          await submitReview(
-                            rating: selectedRating,
-                            comment: commentController.text.trim(),
-                          );
+                        final comment = commentController.text.trim();
+                        if (comment.isEmpty) {
+                          setDialogState(() => reviewError = "Please write a review");
+                          return;
+                        }
+                        // The dialog stays open (text kept) until the server
+                        // accepts the review.
+                        final pending = submitReview(
+                          rating: selectedRating,
+                          comment: comment,
+                        );
+                        setDialogState(() => reviewError = null);
+                        final error = await pending;
+                        if (!dialogContext.mounted) return;
+                        if (error == null) {
+                          Navigator.pop(dialogContext);
                         } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                "Please write a review",
-                              ),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
+                          setDialogState(() => reviewError = error);
                         }
                       },
                 child: isSubmittingReview

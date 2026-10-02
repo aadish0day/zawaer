@@ -47,6 +47,12 @@ class OfferModel {
     }
   }
 
+  // Same rule as the server's isAllCategories: blank or "All" means unrestricted.
+  bool get isCategoryLimited {
+    final c = applicableCategory.trim().toLowerCase();
+    return c.isNotEmpty && c != "all";
+  }
+
   String get minOrderText {
     if (minOrderAmount <= 0) return "No minimum order";
     return "On orders above ₹${minOrderAmount.toStringAsFixed(0)}";

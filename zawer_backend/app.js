@@ -102,6 +102,7 @@ const authRateLimit = (req, res, next) => {
 app.post(
   [
     "/api/auth/login",
+    "/api/auth/register",
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
   ],

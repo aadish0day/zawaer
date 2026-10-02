@@ -33,7 +33,7 @@ async function call(fn, req) {
 const place = (userId, body) =>
   call(orders.placeOrder, {
     user: { id: userId },
-    body: { customerName: "T", phone: "1", address: "A, Mumbai", ...body },
+    body: { customerName: "T", phone: "9876543210", address: "A, Mumbai", ...body },
   });
 
 const offer = (code, extra) =>

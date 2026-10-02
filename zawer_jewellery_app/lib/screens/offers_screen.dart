@@ -123,33 +123,28 @@ class _OffersScreenState extends State<OffersScreen> {
       return;
     }
 
-    final offer = offers.firstWhere(
-      (o) => o.code == selectedCalcCoupon,
-      orElse: () => OfferModel(
-        id: "",
-        code: selectedCalcCoupon!,
-        title: "",
-        description: "",
-        discountType: "percentage",
-        discountValue: 20,
-        maxDiscount: 10000,
-        minOrderAmount: 25000,
-        applicableCategory: "All",
-        isExpired: false,
-        daysRemaining: 10,
-        hoursRemaining: 0,
-        isValid: true,
-        tag: "",
-        bannerImage: "",
-        terms: [],
-      ),
-    );
+    final matches = offers.where((o) => o.code == selectedCalcCoupon);
+    if (matches.isEmpty) {
+      setState(() {
+        simulatedDiscount = 0.0;
+        simulatedFinalAmount = subtotal;
+        calcMessage = "Select an available privilege coupon";
+      });
+      return;
+    }
+    final offer = matches.first;
+
+    // No cart here: for a category-limited coupon the entered amount stands
+    // for the value of eligible items, which is what the server discounts.
+    final String scope =
+        offer.isCategoryLimited ? " on eligible ${offer.applicableCategory} items" : "";
 
     if (subtotal < offer.minOrderAmount) {
       setState(() {
         simulatedDiscount = 0.0;
         simulatedFinalAmount = subtotal;
-        calcMessage = "Minimum cart valuation of ₹${offer.minOrderAmount.toStringAsFixed(0)} required";
+        calcMessage =
+            "Minimum valuation of ₹${offer.minOrderAmount.toStringAsFixed(0)}$scope required";
       });
       return;
     }
@@ -158,7 +153,7 @@ class _OffersScreenState extends State<OffersScreen> {
     setState(() {
       simulatedDiscount = disc;
       simulatedFinalAmount = subtotal - disc;
-      calcMessage = "You save ₹${disc.toStringAsFixed(0)} with '${offer.code}'!";
+      calcMessage = "You save ₹${disc.toStringAsFixed(0)}$scope with '${offer.code}'!";
     });
   }
 

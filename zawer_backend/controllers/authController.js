@@ -4,6 +4,12 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const MAX_OTP_ATTEMPTS = 5;
+const OTP_RESEND_MS = 60 * 1000;
+
+// Shared validation contract (the app enforces the same rules)
+const PHONE_RE = /^\+?[0-9][0-9 ()-]{6,19}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isValidPassword = (p) => p.length >= 6 && p.length <= 128;
 
 const hashOtp = (otp) =>
   crypto.createHash("sha256").update(otp).digest("hex");
@@ -33,8 +39,24 @@ const registerUser = async (req, res) => {
       });
     }
 
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanPhone = (phone || "").trim();
+
+    if (name.trim().length > 100) {
+      return res.status(400).json({ success: false, message: "Name must be at most 100 characters" });
+    }
+    if (cleanEmail.length > 254 || !EMAIL_RE.test(cleanEmail)) {
+      return res.status(400).json({ success: false, message: "Please enter a valid email address" });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ success: false, message: "Password must be 6-128 characters" });
+    }
+    if (cleanPhone && !PHONE_RE.test(cleanPhone)) {
+      return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
+    }
+
     const existingUser = await User.findOne({
-      email: email.toLowerCase().trim(),
+      email: cleanEmail,
     });
 
     if (existingUser) {
@@ -46,12 +68,21 @@ const registerUser = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await User.create({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      phone: phone || "",
-      password: hashedPassword,
-    });
+    let user;
+    try {
+      user = await User.create({
+        name: name.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
+        password: hashedPassword,
+      });
+    } catch (error) {
+      // Concurrent registration with the same email lost the unique-index race
+      if (error.code === 11000) {
+        return res.status(400).json({ success: false, message: "User already exists" });
+      }
+      throw error;
+    }
 
     return res.status(201).json({
       success: true,
@@ -192,6 +223,15 @@ const updateProfile = async (req, res) => {
       });
     }
 
+    if (name && name.trim().length > 100) {
+      return res.status(400).json({ success: false, message: "Name must be at most 100 characters" });
+    }
+
+    // Empty phone clears it; anything else must be a valid number
+    if (phone != null && phone.trim() && !PHONE_RE.test(phone.trim())) {
+      return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
+    }
+
     if (name && name.trim()) {
       user.name = name.trim();
     }
@@ -248,12 +288,32 @@ const forgotPassword = async (req, res) => {
     }
 
     const otp = crypto.randomInt(100000, 1000000).toString();
+    const now = new Date();
 
-    user.otpCode = hashOtp(otp);
-    user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-    user.otpAttempts = 0;
+    // Per-account throttle: a still-valid OTP issued under 60s ago is kept, so nobody can
+    // keep cancelling a victim's OTP (and resetting its attempt count). Same generic reply.
+    const issued = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        $or: [
+          { otpCode: { $in: ["", null] } },
+          { otpExpiry: { $not: { $gt: now } } },
+          { otpIssuedAt: { $not: { $gt: new Date(now.getTime() - OTP_RESEND_MS) } } },
+        ],
+      },
+      {
+        $set: {
+          otpCode: hashOtp(otp),
+          otpExpiry: new Date(now.getTime() + 10 * 60 * 1000),
+          otpIssuedAt: now,
+          otpAttempts: 0,
+        },
+      }
+    );
 
-    await user.save();
+    if (!issued) {
+      return res.status(200).json(responsePayload);
+    }
 
     // Explicit opt-in only: never expose the OTP unless NODE_ENV=development
     if (process.env.NODE_ENV === "development") {
@@ -288,10 +348,10 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (!isValidPassword(newPassword)) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 6 characters",
+        message: "Password must be 6-128 characters",
       });
     }
 
@@ -391,4 +451,5 @@ module.exports = {
   updateProfile,
   forgotPassword,
   resetPassword,
+  PHONE_RE,
 };

@@ -718,7 +718,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              "Qty: ${item["quantity"]} × ₹${item["price"] ?? 0}",
+                              "Qty: ${item["quantity"]} × ₹${_money(item["price"])}",
                               style: AppFonts.poppins(
                                 color: isDark ? Colors.white60 : Colors.black54,
                                 fontSize: 11,
@@ -749,7 +749,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "₹${order["totalAmount"]}",
+                      "₹${_money(order["totalAmount"])}",
                       style: AppFonts.cinzel(
                         color: AppColors.brand(context),
                         fontWeight: FontWeight.bold,
@@ -939,6 +939,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
       ),
     );
   }
+
+  // Whole rupees, like the other screens. JSON may hold a num or a string.
+  String _money(dynamic value) =>
+      (num.tryParse(value?.toString() ?? "") ?? 0).toStringAsFixed(0);
 
   String _formatDate(String isoDate) {
     try {

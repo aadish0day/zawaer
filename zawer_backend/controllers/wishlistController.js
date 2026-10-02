@@ -3,12 +3,13 @@ const Product = require("../models/Product");
 const { canonicalProductIds, productIdForms } = require("./cartController");
 
 // Concurrent upserts on the unique userId can lose with E11000; the retry sees the winner's doc.
-const retryOnDuplicate = async (fn) => {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error.code !== 11000) throw error;
-    return fn();
+const retryOnDuplicate = async (fn, retries = 3) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error.code !== 11000 || attempt >= retries) throw error;
+    }
   }
 };
 
