@@ -42,9 +42,10 @@ String? validateCheckoutAddress(String? value) {
 // fresh attempt.
 const Duration buyNowKeyMaxAge = Duration(minutes: 30);
 
-// Items and quantities only: after a lost response the coupon may have to be
-// dropped (e.g. its usage was consumed by the order that went through), and
-// the retry must still reuse the key so the server replays that order.
+// Items and quantities only (used for both cart and Buy Now): a retry after a
+// lost response keeps the key even if details changed, so the server either
+// replays that order (same details) or answers 409 "already placed" - never a
+// second order.
 String buyNowKeySignature(List<Map<String, dynamic>> items) =>
     items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
 
@@ -253,10 +254,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }));
   }
 
-  String itemsSignature(List<Map<String, dynamic>> items) {
-    return items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
-  }
-
   List<Map<String, dynamic>> get couponItems {
     return cartItems.map((item) {
       return {"productId": item["productId"], "quantity": item["quantity"]};
@@ -392,15 +389,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         "quantity": item["quantity"],
       };
     }).toList();
+    // The key only changes with the items/quantities. If a timed-out attempt actually
+    // created the order, a retry with edited details reuses the key and the server
+    // answers 409 ("already placed") instead of creating a second order.
     final String keySignature = buyNowKeySignature(cartItems);
-    final String signature = [
-      itemsSignature(cartItems),
-      appliedCouponCode ?? "",
-      name,
-      phone,
-      address,
-      paymentMethod,
-    ].join("\u0001");
 
     final SharedPreferences prefs = await SharedPreferences.getInstance();
 
@@ -413,7 +405,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
     }
 
-    if (idempotencyKey == null || idempotencySignature != signature) {
+    if (idempotencyKey == null || idempotencySignature != keySignature) {
       final String? pendingKey = isBuyNow
           ? pendingBuyNowKey(
               signature: keySignature,
@@ -428,7 +420,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       } else {
         await newKey(); // overwrites any stale persisted Buy Now key
       }
-      idempotencySignature = signature;
+      idempotencySignature = keySignature;
     }
 
     Future<Map<String, dynamic>> send() => ApiService.placeOrder(
@@ -447,7 +439,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     // 409 means an order already exists for this key (placed over 24h ago).
     // Resending with a new key would duplicate it, so stop and point to Orders.
-    if (result["statusCode"] == 409 && result["idempotencyConflict"] == true) {
+    final bool alreadyPlaced = result["statusCode"] == 409 && result["idempotencyConflict"] == true;
+    if (alreadyPlaced) {
       idempotencyKey = null;
       if (isBuyNow) await clearPendingBuyNow(prefs);
       result = {
@@ -465,6 +458,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
 
     if (!mounted) return;
+
+    // The earlier attempt went through and the server already took those items out
+    // of the cart; reload so the next tap can't re-order stale items.
+    if (alreadyPlaced && !isBuyNow) loadCheckoutData();
 
     if (result["success"] == true) {
       // The server removes the ordered items from the cart itself.
@@ -899,7 +896,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ],
           const SizedBox(height: 10),
           InkWell(
-            onTap: () async {
+            // Not while an order is in flight: the result dialog must open over Checkout.
+            onTap: isPlacingOrder ? null : () async {
               await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const OffersScreen()),

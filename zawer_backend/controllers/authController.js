@@ -6,6 +6,7 @@ const { cpLen, isValidPhone, isValidPassword } = require("../utils/validation");
 
 const MAX_OTP_ATTEMPTS = 5;
 const OTP_LOCKOUT_MS = 15 * 60 * 1000;
+const OTP_ATTEMPT_WINDOW_MS = 60 * 60 * 1000;
 const OTP_RESEND_MS = 60 * 1000;
 
 // Shared validation contract (the app enforces the same rules; lengths in code points)
@@ -300,14 +301,25 @@ const forgotPassword = async (req, res) => {
         // (OTPs expire after 10 min, so an expired one is always past this window.)
         otpIssuedAt: { $not: { $gt: new Date(now.getTime() - OTP_RESEND_MS) } },
       },
-      {
-        $set: {
-          otpCode: hashOtp(otp),
-          otpExpiry: new Date(now.getTime() + 10 * 60 * 1000),
-          otpIssuedAt: now,
-          otpAttempts: 0,
+      // Wrong guesses carry over to a re-issued OTP within an hour, so "4 guesses, new OTP,
+      // repeat" can't dodge the 5-attempt lockout.
+      [
+        {
+          $set: {
+            otpCode: hashOtp(otp),
+            otpExpiry: new Date(now.getTime() + 10 * 60 * 1000),
+            otpIssuedAt: now,
+            otpAttempts: {
+              $cond: [
+                { $lt: [{ $ifNull: ["$otpIssuedAt", new Date(0)] }, new Date(now.getTime() - OTP_ATTEMPT_WINDOW_MS)] },
+                0,
+                { $ifNull: ["$otpAttempts", 0] },
+              ],
+            },
+          },
         },
-      }
+      ],
+      { updatePipeline: true }
     );
 
     if (!issued) {
@@ -390,7 +402,7 @@ const resetPassword = async (req, res) => {
         return res.status(429).json({
           success: false,
           message:
-            "Too many incorrect attempts. Please request a new OTP",
+            "Too many incorrect attempts. Please wait 15 minutes, then request a new OTP",
         });
       }
 

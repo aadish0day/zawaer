@@ -122,8 +122,29 @@ async function main() {
   await User.updateOne({ email }, { $set: { otpIssuedAt: new Date(Date.now() - 61000) } });
   r = await call(auth.forgotPassword, { body: { email } });
   assert.ok(r.body.devOtp, "OTP issued again after the backoff");
-  process.env.NODE_ENV = prevEnv;
   console.log("ok  OTP re-issue backs off 15 min after a lockout");
+
+  // --- 6. Wrong guesses carry over to a re-issued OTP ("4 guesses, new OTP, repeat")
+  const email2 = `r5_otp2${tag}@example.com`;
+  await call(auth.registerUser, { body: { name: "Otp2", email: email2, password: "secret1" } });
+  r = await call(auth.forgotPassword, { body: { email: email2 } });
+  const wrong2 = r.body.devOtp === "000000" ? "111111" : "000000";
+  for (let i = 0; i < 4; i++) {
+    r = await call(auth.resetPassword, { body: { email: email2, otp: wrong2, newPassword: "secret2" } });
+    assert.strictEqual(r.status, 400, "wrong guess " + i);
+  }
+  await User.updateOne({ email: email2 }, { $set: { otpIssuedAt: new Date(Date.now() - 61000) } });
+  r = await call(auth.forgotPassword, { body: { email: email2 } });
+  assert.ok(r.body.devOtp, "re-issued after 60s");
+  assert.strictEqual((await User.findOne({ email: email2 }).lean()).otpAttempts, 4, "attempts carried over");
+  r = await call(auth.resetPassword, { body: { email: email2, otp: r.body.devOtp === "000000" ? "111111" : "000000", newPassword: "secret2" } });
+  assert.strictEqual(r.status, 429, "5th wrong guess across re-issues locks out");
+  // An hour later the count starts fresh
+  await User.updateOne({ email: email2 }, { $set: { otpIssuedAt: new Date(Date.now() - 61 * 60 * 1000), otpAttempts: 3 } });
+  await call(auth.forgotPassword, { body: { email: email2 } });
+  assert.strictEqual((await User.findOne({ email: email2 }).lean()).otpAttempts, 0, "attempts reset after an hour");
+  process.env.NODE_ENV = prevEnv;
+  console.log("ok  wrong OTP guesses count across re-issues within an hour");
 
   await cleanup();
   await mongoose.disconnect();
