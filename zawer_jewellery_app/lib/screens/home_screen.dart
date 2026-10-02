@@ -94,6 +94,7 @@ class HomeScreenState extends State<HomeScreen> {
   // stale (a newer refresh started) and is dropped.
   int _productsRequestSeq = 0;
   int _wishlistRequestSeq = 0;
+  int _wishlistFetchesInFlight = 0;
 
   Future<void> loadProducts() async {
     // Can be called from a SnackBar's Retry after this screen is gone
@@ -153,7 +154,13 @@ class HomeScreenState extends State<HomeScreen> {
 
   Future<void> loadWishlistState() async {
     final int seq = ++_wishlistRequestSeq;
-    final result = await ApiService.getWishlist();
+    final Map<String, dynamic> result;
+    _wishlistFetchesInFlight++;
+    try {
+      result = await ApiService.getWishlist();
+    } finally {
+      _wishlistFetchesInFlight--;
+    }
     if (!mounted || seq != _wishlistRequestSeq) return;
     if (result["statusCode"] == 401) {
       // Signed out: clear stale hearts.
@@ -194,7 +201,9 @@ class HomeScreenState extends State<HomeScreen> {
     if (!_togglingWishlistIds.add(product.id)) return;
     HapticFeedback.lightImpact();
     final isWishlisted = wishlistedIds.contains(product.id);
-    // Invalidate any in-flight wishlist GET so it cannot overwrite this tap.
+    // Invalidate any in-flight wishlist GET so it cannot overwrite this tap;
+    // if one was dropped, refetch once the tap settles.
+    final bool droppedFetch = _wishlistFetchesInFlight > 0;
     _wishlistRequestSeq++;
 
     setState(() {
@@ -213,6 +222,7 @@ class HomeScreenState extends State<HomeScreen> {
     } finally {
       _togglingWishlistIds.remove(product.id);
     }
+    if (droppedFetch && mounted) loadWishlistState();
 
     if (res["success"] != true) {
       if (!mounted) return;

@@ -19,6 +19,7 @@ void main() {
       '9876543210',
       ' 1234567 ',
       '1' * 15,
+      '(022) 2345-6789 0123', // 20 chars, 14 digits
     ]) {
       expect(isValidPhone(ok), isTrue, reason: ok);
     }
@@ -27,6 +28,7 @@ void main() {
       '123456', // 6 digits
       '1' * 16, // 16 digits
       '+1 (234) 567-890-1234', // 21 chars
+      '(022)  2345-6789 0123', // 21 chars, 15 digits
       '91+9876543210', // + not first
       '98765abcde',
       '',
@@ -39,8 +41,13 @@ void main() {
     expect(codePointLength('\u{1F48E}'), 1); // gem emoji: 2 UTF-16 units
     expect(validateName('\u{1F48E}' * 101), isNotNull);
     expect(validateName('a\u{1F48E}' * 50), isNull); // 100 code points
-    expect(validateNewPassword('\u{1F48E}' * 128), isNull);
-    expect(validateNewPassword('\u{1F48E}' * 129), isNotNull);
+    expect(validateName('A'), isNull);
+    expect(validateName('  '), isNotNull);
+    // 6-72 code points and at most 72 UTF-8 bytes (bcrypt limit).
+    expect(validateNewPassword('\u{1F48E}' * 18), isNull); // 72 bytes
+    expect(validateNewPassword('\u{1F48E}' * 19), isNotNull); // 76 bytes
+    expect(validateNewPassword('a' * 72), isNull);
+    expect(validateNewPassword('a' * 73), isNotNull);
     expect(validateNewPassword('12345'), isNotNull);
   });
 }

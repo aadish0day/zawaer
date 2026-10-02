@@ -696,10 +696,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
                           width: 52,
                           height: 52,
                           color: isDark ? const Color(0xFF1C1C22) : const Color(0xFFF7F5F0),
-                          child: item["image"].toString().isEmpty
+                          child: (item["image"] ?? "").toString().isEmpty
                               ? const Icon(Icons.diamond_outlined, size: 20, color: AppColors.gold)
                               : Image.asset(
-                                  item["image"],
+                                  item["image"].toString(),
                                   width: 52,
                                   height: 52,
                                   fit: BoxFit.cover,

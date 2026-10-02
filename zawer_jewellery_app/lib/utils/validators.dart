@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 // Permissive on purpose: accepts plus-addressing (user+tag@gmail.com) and
 // long TLDs (a@shop.jewelry). The server is the real authority.
 final RegExp _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
@@ -25,7 +27,7 @@ const int maxNameLength = 100;
 const int maxEmailLength = 254;
 const int maxPhoneLength = 20;
 const int minPasswordLength = 6;
-const int maxPasswordLength = 128;
+const int maxPasswordLength = 72;
 const int maxAddressLength = 500;
 const int maxReviewLength = 1000;
 
@@ -33,7 +35,6 @@ const int maxReviewLength = 1000;
 String? validateName(String? value) {
   final String v = value?.trim() ?? '';
   if (v.isEmpty) return "Please enter your full name";
-  if (codePointLength(v) < 2) return "Enter a valid name";
   if (codePointLength(v) > maxNameLength) {
     return "Name must be at most $maxNameLength characters";
   }
@@ -47,8 +48,9 @@ String? validateNewPassword(String? value) {
   if (len < minPasswordLength) {
     return "Password must contain at least $minPasswordLength characters";
   }
-  if (len > maxPasswordLength) {
-    return "Password must be at most $maxPasswordLength characters";
+  // bcrypt only uses the first 72 bytes, so the server caps both.
+  if (len > maxPasswordLength || utf8.encode(value).length > maxPasswordLength) {
+    return "Password must be 6-72 characters";
   }
   return null;
 }

@@ -81,8 +81,10 @@ async function main() {
 
   // --- 2. Code-point lengths
   const e = "\u{1F48E}"; // gem emoji: 2 UTF-16 units, 1 code point
-  r = await call(auth.registerUser, { body: { name: e.repeat(100), email: `r4_n${tag}@example.com`, password: "\u{1F512}".repeat(128) } });
-  assert.strictEqual(r.status, 201, "100-emoji name + 128-emoji password ok");
+  r = await call(auth.registerUser, { body: { name: e.repeat(100), email: `r4_n${tag}@example.com`, password: "\u{1F512}".repeat(18) } });
+  assert.strictEqual(r.status, 201, "100-emoji name + 18-emoji (72-byte) password ok");
+  r = await call(auth.registerUser, { body: { name: "A", email: `r4_p${tag}@example.com`, password: "\u{1F512}".repeat(19) } });
+  assert.strictEqual(r.status, 400, "19-emoji (76-byte) password rejected (bcrypt 72-byte cap)");
   r = await call(auth.registerUser, { body: { name: e.repeat(101), email: `r4_m${tag}@example.com`, password: "secret1" } });
   assert.strictEqual(r.status, 400, "101-emoji name rejected");
   r = await call(auth.registerUser, { body: { name: "A", email: `r4_q${tag}@example.com`, password: "\u{1F512}".repeat(5) } });

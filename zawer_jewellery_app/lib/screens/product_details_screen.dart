@@ -46,8 +46,6 @@ bool isLoadingReviews = true;
 // reopened dialog shows the real in-flight state and rebuilds when it ends.
 final ValueNotifier<bool> isSubmittingReview = ValueNotifier(false);
 
-static const int maxReviewLength = 1000;
-
 @override
 void initState() {
   super.initState();

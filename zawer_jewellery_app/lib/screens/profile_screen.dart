@@ -172,6 +172,9 @@ class ProfileScreenState extends State<ProfileScreen> {
                       maxLength: maxPhoneLength,
                       validator: (value) {
                         final phone = value?.trim() ?? "";
+                        // The server only validates a changed phone, so a
+                        // legacy stored value must not block a name edit.
+                        if (phone == userPhone.trim()) return null;
                         if (phone.isNotEmpty && !isValidPhone(phone)) {
                           return "Enter a valid phone number";
                         }

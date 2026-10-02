@@ -22,6 +22,9 @@ class WishlistScreenState extends State<WishlistScreen> {
   String errorMessage = "";
   List<Map<String, dynamic>> wishlist = [];
   bool isMovingAll = false;
+  // Bumped per load; a response whose number is no longer current is stale
+  // (a newer load started) and is dropped.
+  int _loadSeq = 0;
 
   @override
   void initState() {
@@ -35,6 +38,7 @@ class WishlistScreenState extends State<WishlistScreen> {
   Future<void> loadWishlist() async {
     // Called from route-pop callbacks, which may fire after dispose.
     if (!mounted) return;
+    final int seq = ++_loadSeq;
     setState(() {
       isLoading = true;
     });
@@ -42,7 +46,7 @@ class WishlistScreenState extends State<WishlistScreen> {
     try {
       final wishResult = await ApiService.getWishlist();
 
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
 
       if (wishResult["statusCode"] == 401) {
         setState(() {
@@ -83,8 +87,6 @@ class WishlistScreenState extends State<WishlistScreen> {
         });
       }
 
-      if (!mounted) return;
-
       setState(() {
         wishlist = joined;
         isGuest = false;
@@ -92,7 +94,7 @@ class WishlistScreenState extends State<WishlistScreen> {
         isLoading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() {
         isLoading = false;
         errorMessage = "Failed to load wishlist";
@@ -117,6 +119,9 @@ class WishlistScreenState extends State<WishlistScreen> {
     if (!mounted) return;
 
     if (result["success"] == true) {
+      // A load started before this removal could bring the item back;
+      // supersede it with a fresh one.
+      if (isLoading) loadWishlist();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,

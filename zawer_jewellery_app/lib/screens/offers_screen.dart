@@ -729,7 +729,9 @@ class _OffersScreenState extends State<OffersScreen> {
                                 ? "No expiry"
                                 : offer.daysRemaining > 0
                                     ? "${offer.daysRemaining}d left"
-                                    : "${offer.hoursRemaining}h left",
+                                    : offer.hoursRemaining > 0
+                                        ? "${offer.hoursRemaining}h left"
+                                        : "Ends soon",
                         style: AppFonts.poppins(
                           fontSize: 9.5,
                           fontWeight: FontWeight.bold,

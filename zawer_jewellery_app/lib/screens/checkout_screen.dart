@@ -11,7 +11,6 @@ import 'order_tracking_screen.dart';
 import 'offers_screen.dart';
 
 // Delivery field rules, mirroring POST /api/orders validation.
-const int maxAddressLength = 500;
 
 String? validateCheckoutName(String? value) {
   final v = value?.trim() ?? "";
@@ -291,9 +290,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   // =====================================================
   // [codeOverride] re-validates an already applied coupon (e.g. after a cart
   // reload) regardless of what is in the text field.
+  // Bumped per check (and on remove); only the latest result is applied.
+  int _couponRequestSeq = 0;
+
   Future<void> applyCoupon([String? codeOverride]) async {
     final code = (codeOverride ?? couponController.text).trim().toUpperCase();
     if (code.isEmpty) return;
+    final int seq = ++_couponRequestSeq;
 
     HapticFeedback.selectionClick();
     FocusScope.of(context).unfocus();
@@ -310,7 +313,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       items: couponItems,
     );
 
-    if (!mounted) return;
+    if (!mounted || seq != _couponRequestSeq) return;
 
     setState(() {
       isValidatingCoupon = false;
@@ -339,7 +342,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   void removeCoupon() {
     HapticFeedback.lightImpact();
+    _couponRequestSeq++;
     setState(() {
+      isValidatingCoupon = false;
       appliedCouponCode = null;
       appliedDiscount = 0.0;
       couponController.clear();
