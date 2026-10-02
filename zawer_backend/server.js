@@ -10,15 +10,21 @@ let server;
 
 const JWT_SECRET = process.env.JWT_SECRET || "";
 
-if (
-  JWT_SECRET.length < 32 ||
-  JWT_SECRET === "zawer_secret_key_change_in_production"
-) {
-  console.error(
-    "JWT_SECRET is missing, too short (min 32 chars) or the public example value. " +
-      "Generate one with: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\""
-  );
+const GENERATE_HINT =
+  "Generate one with: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"";
+
+// Missing or the published example value: anyone could forge tokens, so refuse to start.
+if (!JWT_SECRET || JWT_SECRET === "zawer_secret_key_change_in_production") {
+  console.error("JWT_SECRET is missing or the public example value. " + GENERATE_HINT);
   process.exit(1);
+}
+
+// Short secrets are easier to guess: allowed, but warned about on every start.
+if (JWT_SECRET.length < 32) {
+  console.warn(
+    `WARNING: JWT_SECRET is only ${JWT_SECRET.length} characters; 32+ random characters is recommended. ` +
+      GENERATE_HINT
+  );
 }
 
 const startServer = async () => {

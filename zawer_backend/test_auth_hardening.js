@@ -83,8 +83,8 @@ const main = async () => {
   r = await call("GET", "/api/auth/profile", null, r.data.token);
   assert.strictEqual(r.status, 200, "new token works right after reset");
 
-  // Weak / public JWT secrets must stop the server before it connects anywhere
-  for (const secret of ["zawer_secret_key_change_in_production", "short", ""]) {
+  // Missing / public JWT secrets must stop the server before it connects anywhere
+  for (const secret of ["zawer_secret_key_change_in_production", ""]) {
     const run = spawnSync(process.execPath, ["server.js"], {
       cwd: __dirname,
       env: { ...process.env, JWT_SECRET: secret, MONGO_URI: "mongodb://127.0.0.1:1/never", PORT: "0" },
@@ -92,6 +92,15 @@ const main = async () => {
     });
     assert.strictEqual(run.status, 1, `server refuses JWT_SECRET=${JSON.stringify(secret)}`);
   }
+  // A short secret is allowed but warned about
+  const short = spawnSync(process.execPath, ["server.js"], {
+    cwd: __dirname,
+    env: { ...process.env, JWT_SECRET: "short", MONGO_URI: "mongodb://127.0.0.1:1/never", PORT: "0" },
+    timeout: 10000,
+  });
+  const out = short.stdout.toString() + short.stderr.toString();
+  assert.ok(out.includes("WARNING: JWT_SECRET is only 5 characters"), "short secret warns");
+  assert.ok(!out.includes("missing or the public example value"), "short secret isn't refused");
 
   console.log("All auth hardening checks passed");
 };

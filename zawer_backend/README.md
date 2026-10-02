@@ -18,7 +18,7 @@ Ensure `.env` exists (copy from `.env.example` if needed):
 ```bash
 cp .env.example .env
 ```
-Then set `JWT_SECRET` to a random value of at least 32 characters; the server refuses to start otherwise:
+Then set `JWT_SECRET`. The server refuses to start if it is missing or the example value, and warns if it is shorter than 32 characters. Use a random value:
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
