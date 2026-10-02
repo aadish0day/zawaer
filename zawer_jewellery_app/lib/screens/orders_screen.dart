@@ -5,6 +5,12 @@ import '../utils/colors.dart';
 import '../utils/text_styles.dart';
 import 'order_tracking_screen.dart';
 
+// Same as derivedTrackingNumber on the server: last 6 chars of _id, uppercased.
+String _derivedTrackingNumber(String? id) {
+  final String s = id ?? "000000";
+  return "ZWR-${(s.length > 6 ? s.substring(s.length - 6) : s).toUpperCase()}";
+}
+
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
@@ -562,7 +568,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final List items = (order["items"] ?? []) as List;
     final String status = order["status"]?.toString() ?? "Order Placed";
     final String trackingNum = order["trackingNumber"]?.toString() ??
-        "ZWR-${order["_id"]?.toString().substring(0, 6).toUpperCase() ?? "000000"}";
+        _derivedTrackingNumber(order["_id"]?.toString());
     final String orderId = order["_id"]?.toString() ?? "";
     final Color statusColor = getStatusColor(status);
 

@@ -156,8 +156,7 @@ class ProfileScreenState extends State<ProfileScreen> {
                     TextFormField(
                       controller: nameController,
                       maxLength: maxNameLength,
-                      validator: (value) =>
-                          (value == null || value.trim().isEmpty) ? "Name is required" : null,
+                      validator: validateName,
                       style: AppFonts.poppins(fontSize: 13.5),
                       decoration: InputDecoration(
                         labelText: "Full Name",

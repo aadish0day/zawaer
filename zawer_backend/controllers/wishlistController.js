@@ -17,22 +17,24 @@ const getWishlist = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const wishlist = await retryOnDuplicate(() =>
+    // Raw doc kept so the normalization write below can guard on the exact stored items
+    const raw = await retryOnDuplicate(() =>
       Wishlist.findOneAndUpdate(
         { userId },
         { $setOnInsert: { items: [] } },
         { returnDocument: "after", upsert: true }
-      )
+      ).lean()
     );
+    const wishlist = Wishlist.hydrate(raw);
 
     // Normalize legacy _id lines to the custom id (deduped) and drop deleted products
     if (wishlist.items.length > 0) {
       const canonical = await canonicalProductIds(wishlist.items.map((i) => i.productId));
       const ids = [...new Set(wishlist.items.map((i) => canonical.get(i.productId)).filter(Boolean))];
       if (ids.length !== wishlist.items.length || ids.some((id, i) => id !== wishlist.items[i].productId)) {
-        // Guarded on updatedAt so a concurrent add isn't overwritten; a miss just retries next read
+        // Guarded on the items array we read so a concurrent add isn't overwritten; a miss just retries next read
         await Wishlist.updateOne(
-          { _id: wishlist._id, updatedAt: wishlist.updatedAt },
+          { _id: wishlist._id, $expr: { $eq: ["$items", { $literal: raw.items }] } },
           { $set: { items: ids.map((productId) => ({ productId })) } }
         );
       }

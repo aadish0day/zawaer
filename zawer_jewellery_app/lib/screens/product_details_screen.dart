@@ -4,6 +4,7 @@ import '../utils/text_styles.dart';
 import '../models/product_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 import 'checkout_screen.dart';
 import 'login_screen.dart';
 
@@ -41,13 +42,23 @@ int totalReviews = 0;
 
 bool isLoadingReviews = true;
 
-bool isSubmittingReview = false;
+// A notifier, not a plain field: the review dialog listens to it, so a
+// reopened dialog shows the real in-flight state and rebuilds when it ends.
+final ValueNotifier<bool> isSubmittingReview = ValueNotifier(false);
+
+static const int maxReviewLength = 1000;
 
 @override
 void initState() {
   super.initState();
   fetchReviews();
   checkWishlistStatus();
+}
+
+@override
+void dispose() {
+  isSubmittingReview.dispose();
+  super.dispose();
 }
 
 Future<void> checkWishlistStatus() async {
@@ -164,9 +175,7 @@ Future<String?> submitReview({
   required int rating,
   required String comment,
 }) async {
-  setState(() {
-    isSubmittingReview = true;
-  });
+  isSubmittingReview.value = true;
 
   final result = await ApiService.addProductReview(
     productId: widget.product.id,
@@ -176,9 +185,7 @@ Future<String?> submitReview({
 
   if (!mounted) return null;
 
-  setState(() {
-    isSubmittingReview = false;
-  });
+  isSubmittingReview.value = false;
 
   if (result["success"] != true) {
     return result["message"]?.toString() ?? "Could not submit review";
@@ -252,7 +259,7 @@ void showReviewDialog() {
                   controller: commentController,
                   maxLines: 4,
                   minLines: 3,
-                  maxLength: 1000,
+                  maxLength: maxReviewLength,
                   decoration: InputDecoration(
                     hintText: "Write your review...",
                     errorText: reviewError,
@@ -273,16 +280,23 @@ void showReviewDialog() {
                 },
                 child: const Text("Cancel"),
               ),
-              ElevatedButton(
+              ValueListenableBuilder<bool>(
+                valueListenable: isSubmittingReview,
+                builder: (context, submitting, _) => ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                 ),
-                onPressed: isSubmittingReview || selectedRating == 0
+                onPressed: submitting || selectedRating == 0
                     ? null
                     : () async {
                         final comment = commentController.text.trim();
                         if (comment.isEmpty) {
                           setDialogState(() => reviewError = "Please write a review");
+                          return;
+                        }
+                        if (codePointLength(comment) > maxReviewLength) {
+                          setDialogState(() => reviewError =
+                              "Review must be $maxReviewLength characters or fewer");
                           return;
                         }
                         // The dialog stays open (text kept) until the server
@@ -300,7 +314,7 @@ void showReviewDialog() {
                           setDialogState(() => reviewError = error);
                         }
                       },
-                child: isSubmittingReview
+                child: submitting
                     ? const SizedBox(
                         width: 20,
                         height: 20,
@@ -313,6 +327,7 @@ void showReviewDialog() {
                         "Submit",
                         style: TextStyle(color: Colors.white),
                       ),
+                ),
               ),
             ],
           );

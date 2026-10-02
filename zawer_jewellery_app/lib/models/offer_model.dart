@@ -1,3 +1,5 @@
+import 'dart:math';
+
 class OfferModel {
   final String id;
   final String code;
@@ -58,8 +60,8 @@ class OfferModel {
     return "On orders above ₹${minOrderAmount.toStringAsFixed(0)}";
   }
 
-  // Mirrors Offer.calculateDiscount on the server, including the final
-  // Math.round (same as roundToDouble for the non-negative values here).
+  // Mirrors Offer.calculateDiscount on the server exactly: round, then cap
+  // at the order amount (roundToDouble == Math.round for non-negatives).
   double calculateDiscount(double subtotal) {
     if (subtotal < minOrderAmount) return 0.0;
     double discount = 0.0;
@@ -69,9 +71,9 @@ class OfferModel {
         discount = maxDiscount;
       }
     } else if (discountType == "flat") {
-      discount = discountValue > subtotal ? subtotal : discountValue;
+      discount = discountValue;
     }
-    return discount.roundToDouble();
+    return min(max(0.0, discount).roundToDouble(), max(0.0, subtotal));
   }
 
   factory OfferModel.fromJson(Map<String, dynamic> json) {

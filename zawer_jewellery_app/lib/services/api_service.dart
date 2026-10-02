@@ -254,27 +254,6 @@ class ApiService {
   }
 
   // =========================================================
-  // SEARCH PRODUCTS
-  // =========================================================
-
-  static Future<Map<String, dynamic>> searchProducts(String search) async {
-    final String encodedSearch = Uri.encodeComponent(search);
-    final Uri url = Uri.parse("$baseUrl/api/products/search?search=$encodedSearch");
-
-    try {
-      final response = await _send("GET", () => http.get(url));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
   // ADD TO CART
   // =========================================================
 
@@ -743,58 +722,6 @@ class ApiService {
         "statusCode": 0,
         "success": false,
         "message": error is TimeoutException ? _timeoutMessage : "Unable to fetch order tracking",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
-  // TRACK ORDER BY TRACKING NUMBER OR ID
-  // =========================================================
-
-  static Future<Map<String, dynamic>> trackOrderByNumber(String query) async {
-    final String token = await getToken();
-    final Uri url = Uri.parse(
-      "$baseUrl/api/orders/track/${Uri.encodeComponent(query.trim())}",
-    );
-
-    try {
-      final response = await _send("GET", () => http.get(
-        url,
-        headers: {"Authorization": "Bearer $token"},
-      ));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": error is TimeoutException ? _timeoutMessage : "Unable to track order",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
-  // GET ORDER BY ID
-  // =========================================================
-
-  static Future<Map<String, dynamic>> getOrderById(String orderId) async {
-    final String token = await getToken();
-    final Uri url = Uri.parse(
-      "$baseUrl/api/orders/${Uri.encodeComponent(orderId.trim())}",
-    );
-
-    try {
-      final response = await _send("GET", () => http.get(
-        url,
-        headers: {"Authorization": "Bearer $token"},
-      ));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": error is TimeoutException ? _timeoutMessage : "Unable to fetch order details",
         "error": error.toString(),
       };
     }

@@ -2,14 +2,14 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const { cpLen, isValidPhone } = require("../utils/validation");
 
 const MAX_OTP_ATTEMPTS = 5;
 const OTP_RESEND_MS = 60 * 1000;
 
-// Shared validation contract (the app enforces the same rules)
-const PHONE_RE = /^\+?[0-9][0-9 ()-]{6,19}$/;
+// Shared validation contract (the app enforces the same rules; lengths in code points)
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const isValidPassword = (p) => p.length >= 6 && p.length <= 128;
+const isValidPassword = (p) => cpLen(p) >= 6 && cpLen(p) <= 128;
 
 const hashOtp = (otp) =>
   crypto.createHash("sha256").update(otp).digest("hex");
@@ -42,16 +42,16 @@ const registerUser = async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
     const cleanPhone = (phone || "").trim();
 
-    if (name.trim().length > 100) {
+    if (cpLen(name.trim()) > 100) {
       return res.status(400).json({ success: false, message: "Name must be at most 100 characters" });
     }
-    if (cleanEmail.length > 254 || !EMAIL_RE.test(cleanEmail)) {
+    if (cpLen(cleanEmail) > 254 || !EMAIL_RE.test(cleanEmail)) {
       return res.status(400).json({ success: false, message: "Please enter a valid email address" });
     }
     if (!isValidPassword(password)) {
       return res.status(400).json({ success: false, message: "Password must be 6-128 characters" });
     }
-    if (cleanPhone && !PHONE_RE.test(cleanPhone)) {
+    if (cleanPhone && !isValidPhone(cleanPhone)) {
       return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
     }
 
@@ -223,12 +223,13 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    if (name && name.trim().length > 100) {
+    if (name && cpLen(name.trim()) > 100) {
       return res.status(400).json({ success: false, message: "Name must be at most 100 characters" });
     }
 
-    // Empty phone clears it; anything else must be a valid number
-    if (phone != null && phone.trim() && !PHONE_RE.test(phone.trim())) {
+    // Empty phone clears it; a new number must be valid. An unchanged (possibly legacy)
+    // phone is not re-validated, so it can't block a name change.
+    if (phone != null && phone.trim() && phone.trim() !== user.phone && !isValidPhone(phone)) {
       return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
     }
 
@@ -449,5 +450,4 @@ module.exports = {
   updateProfile,
   forgotPassword,
   resetPassword,
-  PHONE_RE,
 };

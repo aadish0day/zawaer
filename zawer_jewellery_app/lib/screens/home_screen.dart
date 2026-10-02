@@ -194,6 +194,8 @@ class HomeScreenState extends State<HomeScreen> {
     if (!_togglingWishlistIds.add(product.id)) return;
     HapticFeedback.lightImpact();
     final isWishlisted = wishlistedIds.contains(product.id);
+    // Invalidate any in-flight wishlist GET so it cannot overwrite this tap.
+    _wishlistRequestSeq++;
 
     setState(() {
       if (isWishlisted) {

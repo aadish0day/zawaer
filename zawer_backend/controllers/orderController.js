@@ -3,10 +3,12 @@ const Order = require("../models/Order");
 const Product = require("../models/Product");
 const Cart = require("../models/Cart");
 const Offer = require("../models/Offer");
-const { PHONE_RE } = require("./authController");
+const { cpLen, isValidPhone } = require("../utils/validation");
 
 const round2 = (x) => Math.round(x * 100) / 100;
 const IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Exact values the app's checkout sends
+const PAYMENT_METHODS = ["Cash on Delivery", "UPI", "Credit/Debit Card"];
 
 const TRACKING_STAGES = [
   {
@@ -303,7 +305,7 @@ const placeOrder = async (req, res) => {
     const contact = {};
     for (const [field, max] of [["customerName", 100], ["phone", 20], ["address", 500], ["paymentMethod", 30]]) {
       const value = field === "paymentMethod" && req.body[field] == null ? "Cash on Delivery" : req.body[field];
-      if (typeof value !== "string" || !value.trim() || value.trim().length > max) {
+      if (typeof value !== "string" || !value.trim() || cpLen(value.trim()) > max) {
         return res.status(400).json({
           success: false,
           message: `${field} must be a non-empty string of at most ${max} characters`,
@@ -311,8 +313,11 @@ const placeOrder = async (req, res) => {
       }
       contact[field] = value.trim();
     }
-    if (!PHONE_RE.test(contact.phone)) {
+    if (!isValidPhone(contact.phone)) {
       return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
+    }
+    if (!PAYMENT_METHODS.includes(contact.paymentMethod)) {
+      return res.status(400).json({ success: false, message: "Unsupported payment method" });
     }
 
     if (couponCode != null && typeof couponCode !== "string") {
@@ -453,15 +458,13 @@ const placeOrder = async (req, res) => {
       }
 
       // Reserve one use atomically so concurrent orders cannot exceed usageLimit
+      // Uses the loaded usageLimit (schema default applied when the field is missing) so this
+      // agrees with the pre-check above; a stored limit changed meanwhile wins on the next order.
+      const limit = offer.usageLimit;
       const reserved = await Offer.findOneAndUpdate(
-        {
-          _id: offer._id,
-          $or: [
-            { usageLimit: null },
-            { usageLimit: { $lte: 0 } },
-            { $expr: { $lt: ["$usedCount", "$usageLimit"] } },
-          ],
-        },
+        limit > 0
+          ? { _id: offer._id, $expr: { $lt: [{ $ifNull: ["$usedCount", 0] }, limit] } }
+          : { _id: offer._id },
         { $inc: { usedCount: 1 } }
       );
 
@@ -514,7 +517,14 @@ const placeOrder = async (req, res) => {
         }
       }
     } catch (err) {
-      if (appliedOfferId) await releaseCoupon(appliedOfferId);
+      if (appliedOfferId) {
+        try {
+          await releaseCoupon(appliedOfferId);
+        } catch (releaseError) {
+          // Don't mask the original failure; usedCount stays one too high
+          console.error("Coupon release after failed order failed:", releaseError.message);
+        }
+      }
       if (idempotencyKey && err.code === 11000 && err.keyPattern && err.keyPattern.idempotencyKey) {
         const existing = await Order.findOne({ userId, idempotencyKey });
         if (existing) return replay(existing);
@@ -787,10 +797,13 @@ const updateOrderStatus = async (req, res) => {
     }
 
     if (status === "Cancelled" && (updated.couponOfferId || updated.couponCode)) {
-      // Release by offer id; orders placed before couponOfferId existed fall back to the code.
+      // Release by offer id. Orders placed before couponOfferId existed fall back to the code:
+      // every version of placeOrder since coupons were added incremented usedCount, so those
+      // uses are real. The fallback only matches an offer that already existed when the order
+      // was placed, so a code deleted and re-created later is never decremented.
       const offerFilter = updated.couponOfferId
         ? { _id: updated.couponOfferId }
-        : { code: updated.couponCode };
+        : { code: updated.couponCode, createdAt: { $lte: updated.createdAt || updated._id.getTimestamp() } };
       try {
         await Offer.updateOne({ ...offerFilter, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
       } catch (releaseError) {

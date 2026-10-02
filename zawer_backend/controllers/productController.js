@@ -1,4 +1,5 @@
 const Product = require("../models/Product");
+const { cpLen } = require("../utils/validation");
 
 function escapeRegex(text) {
   if (typeof text !== "string") return "";
@@ -169,7 +170,7 @@ const addProductReview = async (req, res) => {
     }
 
     const text = typeof comment === "string" ? comment.trim() : "";
-    if (!text || text.length > MAX_COMMENT_LENGTH) {
+    if (!text || cpLen(text) > MAX_COMMENT_LENGTH) {
       return res.status(400).json({
         success: false,
         message: `Comment is required (max ${MAX_COMMENT_LENGTH} characters)`,

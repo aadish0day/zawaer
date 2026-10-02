@@ -264,18 +264,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                         ),
 
-                        validator: (value) {
-                          if (value == null ||
-                              value.trim().isEmpty) {
-                            return "Please enter your full name";
-                          }
-
-                          if (value.trim().length < 2) {
-                            return "Enter a valid name";
-                          }
-
-                          return null;
-                        },
+                        validator: validateName,
                       ),
 
                       const SizedBox(height: 18),
@@ -398,18 +387,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                         ),
 
-                        validator: (value) {
-                          if (value == null ||
-                              value.isEmpty) {
-                            return "Password is required";
-                          }
-
-                          if (value.length < minPasswordLength) {
-                            return "Password should contain at least 6 characters";
-                          }
-
-                          return null;
-                        },
+                        validator: validateNewPassword,
                       ),
 
                       const SizedBox(height: 18),

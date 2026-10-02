@@ -11,14 +11,36 @@ void main() {
   });
 
   test('isValidPhone matches the backend contract', () {
-    expect(isValidPhone('9876543210'), isTrue);
-    expect(isValidPhone('+91 98765-43210'), isTrue);
-    expect(isValidPhone('(022) 1234567'), isFalse); // must start with + or digit
-    expect(isValidPhone(' 1234567 '), isTrue); // 7 chars after trim
-    expect(isValidPhone('123456'), isFalse); // too short
-    expect(isValidPhone('1' * 20), isTrue);
-    expect(isValidPhone('1' * 21), isFalse); // too long
-    expect(isValidPhone('98765abcde'), isFalse);
-    expect(isValidPhone(''), isFalse);
+    for (final ok in [
+      '(022) 2345 6789',
+      '98765.43210',
+      '+91 98765 43210',
+      '098765-43210',
+      '9876543210',
+      ' 1234567 ',
+      '1' * 15,
+    ]) {
+      expect(isValidPhone(ok), isTrue, reason: ok);
+    }
+    for (final bad in [
+      '1------',
+      '123456', // 6 digits
+      '1' * 16, // 16 digits
+      '+1 (234) 567-890-1234', // 21 chars
+      '91+9876543210', // + not first
+      '98765abcde',
+      '',
+    ]) {
+      expect(isValidPhone(bad), isFalse, reason: bad);
+    }
+  });
+
+  test('lengths count code points', () {
+    expect(codePointLength('\u{1F48E}'), 1); // gem emoji: 2 UTF-16 units
+    expect(validateName('\u{1F48E}' * 101), isNotNull);
+    expect(validateName('a\u{1F48E}' * 50), isNull); // 100 code points
+    expect(validateNewPassword('\u{1F48E}' * 128), isNull);
+    expect(validateNewPassword('\u{1F48E}' * 129), isNotNull);
+    expect(validateNewPassword('12345'), isNotNull);
   });
 }

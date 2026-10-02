@@ -10,10 +10,8 @@ void main() {
     expect(validateCheckoutPhone(''), isNotNull);
     expect(validateCheckoutPhone('+91 98765 43210'), isNull);
     expect(validateCheckoutPhone('022 (555) 0101'), isNull);
-    expect(
-      validateCheckoutPhone('(022) 555-0101'),
-      isNotNull,
-    ); // must start with + or digit
+    expect(validateCheckoutPhone('(022) 555-0101'), isNull); // brackets allowed first
+    expect(validateCheckoutPhone('1------'), isNotNull); // needs 7-15 digits
     expect(validateCheckoutPhone('12345'), isNotNull);
     expect(validateCheckoutPhone('phone123'), isNotNull);
     expect(validateCheckoutPhone('+${'1' * 20}'), isNotNull); // 21 chars

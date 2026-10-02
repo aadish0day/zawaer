@@ -102,8 +102,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     super.dispose();
   }
 
+  // Only the latest load may apply its result; a slower earlier response
+  // (e.g. pre-status-change) must not overwrite newer data.
+  int _loadSeq = 0;
+
   Future<void> loadTrackingData() async {
     if (!mounted) return;
+    final int seq = ++_loadSeq;
     setState(() {
       isLoading = true;
       errorMessage = null;
@@ -111,7 +116,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
 
     final result = await ApiService.getOrderTracking(widget.orderId);
 
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
 
     if (result["success"] == true && result["tracking"] != null) {
       setState(() {

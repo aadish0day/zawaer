@@ -46,13 +46,15 @@ const getCart = async (req, res) => {
   try {
     const userId = req.user.id.toString();
 
-    const cart = await retryOnDuplicate(() =>
+    // Raw doc kept so the normalization write below can guard on the exact stored items
+    const raw = await retryOnDuplicate(() =>
       Cart.findOneAndUpdate(
         { userId },
         { $setOnInsert: { items: [] } },
         { returnDocument: "after", upsert: true }
-      )
+      ).lean()
     );
+    const cart = Cart.hydrate(raw);
 
     // Normalize legacy _id lines to the custom id (merged, capped) and drop deleted products
     if (cart.items.length > 0) {
@@ -67,8 +69,8 @@ const getCart = async (req, res) => {
         items.length !== cart.items.length ||
         items.some((it, i) => it.productId !== cart.items[i].productId || it.quantity !== cart.items[i].quantity);
       if (changed) {
-        // Guarded on updatedAt so a concurrent add isn't overwritten; a miss just retries next read
-        await Cart.updateOne({ _id: cart._id, updatedAt: cart.updatedAt }, { $set: { items } });
+        // Guarded on the items array we read so a concurrent add isn't overwritten; a miss just retries next read
+        await Cart.updateOne({ _id: cart._id, $expr: { $eq: ["$items", { $literal: raw.items }] } }, { $set: { items } });
       }
     }
 

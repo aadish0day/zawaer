@@ -498,6 +498,8 @@ class _ForgotPasswordScreenState
 
                           obscureText: true,
 
+                          maxLength: maxPasswordLength,
+
                           decoration:
                           const InputDecoration(
 
@@ -509,24 +511,7 @@ class _ForgotPasswordScreenState
 
                           ),
 
-                          validator: (value) {
-
-                            if (value == null ||
-                                value.isEmpty) {
-
-                              return "Enter New Password";
-
-                            }
-
-                            if (value.length < 6) {
-
-                              return "Minimum 6 characters";
-
-                            }
-
-                            return null;
-
-                          },
+                          validator: validateNewPassword,
 
                         ),
 

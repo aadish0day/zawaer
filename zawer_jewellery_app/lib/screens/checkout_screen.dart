@@ -16,7 +16,7 @@ const int maxAddressLength = 500;
 String? validateCheckoutName(String? value) {
   final v = value?.trim() ?? "";
   if (v.isEmpty) return "Please enter the recipient's name";
-  if (v.length > maxNameLength) return "Name must be $maxNameLength characters or fewer";
+  if (codePointLength(v) > maxNameLength) return "Name must be $maxNameLength characters or fewer";
   return null;
 }
 
@@ -32,15 +32,28 @@ String? validateCheckoutPhone(String? value) {
 String? validateCheckoutAddress(String? value) {
   final v = value?.trim() ?? "";
   if (v.isEmpty) return "Please enter a delivery address";
-  if (v.length > maxAddressLength) {
+  if (codePointLength(v) > maxAddressLength) {
     return "Address must be $maxAddressLength characters or fewer";
   }
   return null;
 }
 
-// A persisted Buy Now key is reused only for the same order inputs and only
-// within 30 minutes; anything else starts a fresh attempt.
+// A persisted Buy Now key is reused only for the same items and quantities
+// (see buyNowKeySignature) and only within 30 minutes; anything else starts a
+// fresh attempt.
 const Duration buyNowKeyMaxAge = Duration(minutes: 30);
+
+// Items and quantities only: after a lost response the coupon may have to be
+// dropped (e.g. its usage was consumed by the order that went through), and
+// the retry must still reuse the key so the server replays that order.
+String buyNowKeySignature(List<Map<String, dynamic>> items) =>
+    items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
+
+// Items, quantities and prices: any change means an applied coupon's discount
+// must be re-validated.
+String pricedItemsSignature(List<Map<String, dynamic>> items) => items
+    .map((item) => "${item["productId"]}x${item["quantity"]}@${item["price"]}")
+    .join(",");
 
 String? pendingBuyNowKey({
   required String signature,
@@ -157,6 +170,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     if (!mounted) return;
 
+    final bool firstLoad = isLoading;
+    final String previousItems = pricedItemsSignature(cartItems);
+
     if (widget.buyNowItems != null) {
       final items = await refreshBuyNowPrices(widget.buyNowItems!);
       if (!mounted) return;
@@ -164,15 +180,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         cartItems = items;
         isLoading = false;
       });
-      if (widget.initialCouponCode != null &&
-          widget.initialCouponCode!.trim().isNotEmpty) {
-        applyCoupon();
-      }
+      recheckCoupon(firstLoad, previousItems);
       return;
     }
-
-    final bool firstLoad = isLoading;
-    final String previousItems = itemsSignature(cartItems);
 
     final cartResult = await ApiService.getCart();
 
@@ -208,19 +218,25 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         isLoading = false;
       });
 
-      final bool itemsChanged = itemsSignature(joined) != previousItems;
-      if (joined.isNotEmpty &&
-          ((firstLoad &&
-                  widget.initialCouponCode != null &&
-                  widget.initialCouponCode!.trim().isNotEmpty) ||
-              (!firstLoad && itemsChanged && appliedCouponCode != null))) {
-        applyCoupon(appliedCouponCode);
-      }
+      recheckCoupon(firstLoad, previousItems);
     } else {
       setState(() {
         loadError = cartResult["message"]?.toString() ?? "Unable to load your cart";
         isLoading = false;
       });
+    }
+  }
+
+  // First load applies the coupon passed in; later reloads re-validate an
+  // applied coupon whenever item prices or quantities changed.
+  void recheckCoupon(bool firstLoad, String previousItems) {
+    if (cartItems.isEmpty) return;
+    final bool initialCoupon = widget.initialCouponCode?.trim().isNotEmpty ?? false;
+    if (firstLoad
+        ? initialCoupon
+        : appliedCouponCode != null &&
+            pricedItemsSignature(cartItems) != previousItems) {
+      applyCoupon(appliedCouponCode);
     }
   }
 
@@ -371,6 +387,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         "quantity": item["quantity"],
       };
     }).toList();
+    final String keySignature = buyNowKeySignature(cartItems);
     final String signature = [
       itemsSignature(cartItems),
       appliedCouponCode ?? "",
@@ -386,7 +403,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       idempotencyKey = generateIdempotencyKey();
       if (isBuyNow) {
         await prefs.setString(pendingKeyPref, idempotencyKey!);
-        await prefs.setString(pendingSigPref, signature);
+        await prefs.setString(pendingSigPref, keySignature);
         await prefs.setInt(pendingAtPref, DateTime.now().millisecondsSinceEpoch);
       }
     }
@@ -394,7 +411,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (idempotencyKey == null || idempotencySignature != signature) {
       final String? pendingKey = isBuyNow
           ? pendingBuyNowKey(
-              signature: signature,
+              signature: keySignature,
               storedKey: prefs.getString(pendingKeyPref),
               storedSignature: prefs.getString(pendingSigPref),
               storedAt: prefs.getInt(pendingAtPref),

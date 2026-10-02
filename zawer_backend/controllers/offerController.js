@@ -55,8 +55,10 @@ const formatOffer = (offer, now = new Date()) => {
 // =========================================================
 exports.getAllOffers = async (req, res) => {
   try {
+    // Missing isActive = active (schema default). `now` is taken after loading, since a
+    // missing startDate is filled with Date.now on load and must not be in the future.
+    const offers = await Offer.find({ isActive: { $ne: false } }).sort({ createdAt: -1 });
     const now = new Date();
-    const offers = await Offer.find({ isActive: true }).sort({ createdAt: -1 });
 
     const formattedOffers = offers.map((offer) => formatOffer(offer, now));
 
@@ -275,7 +277,7 @@ exports.validateCoupon = async (req, res) => {
 exports.getOfferByCode = async (req, res) => {
   try {
     const code = req.params.code.trim().toUpperCase();
-    const offer = await Offer.findOne({ code, isActive: true });
+    const offer = await Offer.findOne({ code, isActive: { $ne: false } });
 
     if (!offer) {
       return res.status(404).json({
