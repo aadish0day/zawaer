@@ -332,9 +332,10 @@ void showReviewDialog() {
         },
       );
     },
-  ).then((_) {
-    commentController.dispose();
-  });
+  );
+  // Not disposed in .then(): that runs as soon as the dialog pops, while its closing
+  // animation still renders these fields (crashed on Android). The controllers are
+  // local to this call and are garbage-collected with the dialog.
 }
 
 //==========================

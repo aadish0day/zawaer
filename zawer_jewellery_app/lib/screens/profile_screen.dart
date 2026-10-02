@@ -267,10 +267,10 @@ class ProfileScreenState extends State<ProfileScreen> {
           },
         );
       },
-    ).then((_) {
-      nameController.dispose();
-      phoneController.dispose();
-    });
+    );
+    // Not disposed in .then(): that runs as soon as the dialog pops, while its closing
+    // animation still renders these fields (crashed on Android). The controllers are
+    // local to this call and are garbage-collected with the dialog.
   }
 
   // =====================================================
@@ -344,9 +344,10 @@ class ProfileScreenState extends State<ProfileScreen> {
           ],
         );
       },
-    ).then((_) {
-      addressController.dispose();
-    });
+    );
+    // Not disposed in .then(): that runs as soon as the dialog pops, while its closing
+    // animation still renders these fields (crashed on Android). The controllers are
+    // local to this call and are garbage-collected with the dialog.
   }
 
   // =====================================================
@@ -1093,9 +1094,10 @@ class ProfileScreenState extends State<ProfileScreen> {
           ],
         );
       },
-    ).then((_) {
-      trackController.dispose();
-    });
+    );
+    // Not disposed in .then(): that runs as soon as the dialog pops, while its closing
+    // animation still renders these fields (crashed on Android). The controllers are
+    // local to this call and are garbage-collected with the dialog.
   }
 
   void showConciergeModal() {
