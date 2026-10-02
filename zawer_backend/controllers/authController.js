@@ -311,7 +311,13 @@ const forgotPassword = async (req, res) => {
             otpIssuedAt: now,
             otpAttempts: {
               $cond: [
-                { $lt: [{ $ifNull: ["$otpIssuedAt", new Date(0)] }, new Date(now.getTime() - OTP_ATTEMPT_WINDOW_MS)] },
+                {
+                  $or: [
+                    { $lt: [{ $ifNull: ["$otpIssuedAt", new Date(0)] }, new Date(now.getTime() - OTP_ATTEMPT_WINDOW_MS)] },
+                    // A lockout write that lost a race must not leave a new OTP unusable
+                    { $gte: [{ $ifNull: ["$otpAttempts", 0] }, MAX_OTP_ATTEMPTS] },
+                  ],
+                },
                 0,
                 { $ifNull: ["$otpAttempts", 0] },
               ],

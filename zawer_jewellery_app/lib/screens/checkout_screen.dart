@@ -437,7 +437,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     Map<String, dynamic> result = await send();
 
-    // 409 means an order already exists for this key (placed over 24h ago).
+    // 409 means an order already exists for this key (over 24h old, or this retry
+    // changed the details).
     // Resending with a new key would duplicate it, so stop and point to Orders.
     final bool alreadyPlaced = result["statusCode"] == 409 && result["idempotencyConflict"] == true;
     if (alreadyPlaced) {
