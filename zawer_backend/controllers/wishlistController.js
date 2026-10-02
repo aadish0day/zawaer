@@ -32,10 +32,11 @@ const getWishlist = async (req, res) => {
       const canonical = await canonicalProductIds(wishlist.items.map((i) => i.productId));
       const ids = [...new Set(wishlist.items.map((i) => canonical.get(i.productId)).filter(Boolean))];
       if (ids.length !== wishlist.items.length || ids.some((id, i) => id !== wishlist.items[i].productId)) {
-        // Guarded on the items array we read so a concurrent add isn't overwritten; a miss just retries next read
-        await Wishlist.updateOne(
+        // Guarded on the exact stored items array so a concurrent add isn't overwritten; a miss just retries next read.
+        // Driver call on purpose: Mongoose would cast the $literal to the current schema (dropping legacy _id), so it never matched.
+        await Wishlist.collection.updateOne(
           { _id: wishlist._id, $expr: { $eq: ["$items", { $literal: raw.items }] } },
-          { $set: { items: ids.map((productId) => ({ productId })) } }
+          { $set: { items: ids.map((productId) => ({ productId })), updatedAt: new Date() } }
         );
       }
     }

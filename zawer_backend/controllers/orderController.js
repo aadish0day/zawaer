@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
 const Cart = require("../models/Cart");
@@ -338,11 +339,26 @@ const placeOrder = async (req, res) => {
       });
     }
 
-    // Replays an order already created for this key, if it is recent enough. The unique
-    // index keeps an old key from ever being reused, so the client must regenerate it.
+    // Fingerprint of what was asked for, so a reused key with different details isn't
+    // answered with someone's earlier order as if it were this one.
+    const requestHash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify([
+          contact,
+          (couponCode || "").trim().toUpperCase(),
+          fromCart !== false,
+          items.map((i) => [String(i && i.productId), Number(i && i.quantity)]).sort(),
+        ])
+      )
+      .digest("hex");
+
+    // Replays an order already created for this key if it's recent and for the same request.
+    // Otherwise 409: the unique index keeps the key from being reused, so the client regenerates it.
     const replay = (existing) =>
-      Date.now() - new Date(existing.createdAt).getTime() <= IDEMPOTENCY_WINDOW_MS
-        ? res.status(200).json({ success: true, message: "Order placed successfully", order: existing })
+      Date.now() - new Date(existing.createdAt).getTime() <= IDEMPOTENCY_WINDOW_MS &&
+      (!existing.requestHash || existing.requestHash === requestHash)
+        ? res.status(200).json({ success: true, message: "Order placed successfully", order: { ...existing.toObject(), requestHash: undefined } })
         : res.status(409).json({
             success: false,
             idempotencyConflict: true,
@@ -351,7 +367,7 @@ const placeOrder = async (req, res) => {
 
     // 0. Retried checkout: return the order already created for this key
     if (idempotencyKey) {
-      const existing = await Order.findOne({ userId, idempotencyKey });
+      const existing = await Order.findOne({ userId, idempotencyKey }).select("+requestHash");
       if (existing) return replay(existing);
     }
 
@@ -501,7 +517,10 @@ const placeOrder = async (req, res) => {
       aiDeliveryInsight: AI_INSIGHTS["Order Placed"],
       timeline: initialTimeline,
     };
-    if (idempotencyKey) orderData.idempotencyKey = idempotencyKey;
+    if (idempotencyKey) {
+      orderData.idempotencyKey = idempotencyKey;
+      orderData.requestHash = requestHash;
+    }
     if (appliedOfferId) orderData.couponOfferId = appliedOfferId;
 
     // 5. Create the order, retrying on tracking number collisions;
@@ -526,7 +545,7 @@ const placeOrder = async (req, res) => {
         }
       }
       if (idempotencyKey && err.code === 11000 && err.keyPattern && err.keyPattern.idempotencyKey) {
-        const existing = await Order.findOne({ userId, idempotencyKey });
+        const existing = await Order.findOne({ userId, idempotencyKey }).select("+requestHash");
         if (existing) return replay(existing);
       }
       throw err;
@@ -544,7 +563,7 @@ const placeOrder = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Order placed successfully",
-      order,
+      order: { ...order.toObject(), requestHash: undefined },
     });
   } catch (error) {
     console.error("Place Order Error:", error);

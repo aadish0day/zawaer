@@ -2,14 +2,14 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { cpLen, isValidPhone } = require("../utils/validation");
+const { cpLen, isValidPhone, isValidPassword } = require("../utils/validation");
 
 const MAX_OTP_ATTEMPTS = 5;
+const OTP_LOCKOUT_MS = 15 * 60 * 1000;
 const OTP_RESEND_MS = 60 * 1000;
 
 // Shared validation contract (the app enforces the same rules; lengths in code points)
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const isValidPassword = (p) => cpLen(p) >= 6 && cpLen(p) <= 128;
 
 const hashOtp = (otp) =>
   crypto.createHash("sha256").update(otp).digest("hex");
@@ -49,7 +49,7 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ success: false, message: "Please enter a valid email address" });
     }
     if (!isValidPassword(password)) {
-      return res.status(400).json({ success: false, message: "Password must be 6-128 characters" });
+      return res.status(400).json({ success: false, message: "Password must be 6-72 characters" });
     }
     if (cleanPhone && !isValidPhone(cleanPhone)) {
       return res.status(400).json({ success: false, message: "Please enter a valid phone number" });
@@ -350,7 +350,7 @@ const resetPassword = async (req, res) => {
     if (!isValidPassword(newPassword)) {
       return res.status(400).json({
         success: false,
-        message: "Password must be 6-128 characters",
+        message: "Password must be 6-72 characters",
       });
     }
 
@@ -383,7 +383,8 @@ const resetPassword = async (req, res) => {
       if (updated && updated.otpAttempts >= MAX_OTP_ATTEMPTS) {
         await User.updateOne(
           { _id: user._id, otpCode: user.otpCode },
-          { otpCode: "", otpExpiry: null, otpAttempts: 0 }
+          // Back off: no new OTP for 15 min after a lockout (limits guesses per account across IPs)
+          { otpCode: "", otpExpiry: null, otpAttempts: 0, otpIssuedAt: new Date(Date.now() + OTP_LOCKOUT_MS) }
         );
 
         return res.status(429).json({

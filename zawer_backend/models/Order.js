@@ -175,6 +175,11 @@ const orderSchema = new mongoose.Schema(
     idempotencyKey: {
       type: String,
     },
+    // sha256 of the request that created the order with this key (see placeOrder replay)
+    requestHash: {
+      type: String,
+      select: false,
+    },
   },
   {
     timestamps: true,

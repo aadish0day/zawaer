@@ -69,8 +69,12 @@ const getCart = async (req, res) => {
         items.length !== cart.items.length ||
         items.some((it, i) => it.productId !== cart.items[i].productId || it.quantity !== cart.items[i].quantity);
       if (changed) {
-        // Guarded on the items array we read so a concurrent add isn't overwritten; a miss just retries next read
-        await Cart.updateOne({ _id: cart._id, $expr: { $eq: ["$items", { $literal: raw.items }] } }, { $set: { items } });
+        // Guarded on the exact stored items array so a concurrent add isn't overwritten; a miss just retries next read.
+        // Driver call on purpose: Mongoose would cast the $literal to the current schema (dropping legacy fields), so it never matched.
+        await Cart.collection.updateOne(
+          { _id: cart._id, $expr: { $eq: ["$items", { $literal: raw.items }] } },
+          { $set: { items, updatedAt: new Date() } }
+        );
       }
     }
 
