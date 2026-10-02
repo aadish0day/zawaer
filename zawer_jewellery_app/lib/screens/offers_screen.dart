@@ -25,9 +25,18 @@ class _OffersScreenState extends State<OffersScreen> {
 
   // Calculator State
   final TextEditingController calcAmountController = TextEditingController(text: "35000");
-  String? selectedCalcCoupon = "ROYAL20";
-  double simulatedDiscount = 7000;
-  double simulatedFinalAmount = 28000;
+  String? selectedCalcCoupon;
+
+  // The banner and calculator follow whatever coupon is live right now,
+  // not a hardcoded code that silently expires.
+  OfferModel? get featuredOffer {
+    for (final o in offers) {
+      if (o.isValid) return o;
+    }
+    return null;
+  }
+  double simulatedDiscount = 0;
+  double simulatedFinalAmount = 35000;
   String calcMessage = "";
 
   Timer? _countdownTimer;
@@ -99,6 +108,8 @@ class _OffersScreenState extends State<OffersScreen> {
         discountedProducts = loadedProducts;
         isLoading = false;
         errorMessage = "";
+        final stillValid = loadedOffers.any((o) => o.code == selectedCalcCoupon && o.isValid);
+        if (!stillValid) selectedCalcCoupon = featuredOffer?.code;
       });
       // Re-run the calculator against the real offer terms.
       _recalculateSimulation();
@@ -367,6 +378,7 @@ class _OffersScreenState extends State<OffersScreen> {
     final hours = (_flashDuration.inHours % 24).toString().padLeft(2, '0');
     final mins = (_flashDuration.inMinutes % 60).toString().padLeft(2, '0');
     final secs = (_flashDuration.inSeconds % 60).toString().padLeft(2, '0');
+    final OfferModel? featured = featuredOffer;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -450,7 +462,7 @@ class _OffersScreenState extends State<OffersScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                "Royal 20% Heritage Privilege",
+                featured?.title ?? "Maison Privileges",
                 style: AppFonts.cinzel(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -459,7 +471,7 @@ class _OffersScreenState extends State<OffersScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                "Unlock up to ₹10,000 concession on 18K solid gold & solitaire suites above ₹25,000.",
+                featured?.description ?? "New privileges are on their way. Check back soon.",
                 style: AppFonts.poppins(
                   fontSize: 11.5,
                   height: 1.4,
@@ -467,6 +479,7 @@ class _OffersScreenState extends State<OffersScreen> {
                 ),
               ),
               const SizedBox(height: 14),
+              if (featured != null)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -480,7 +493,7 @@ class _OffersScreenState extends State<OffersScreen> {
                     child: Row(
                       children: [
                         Text(
-                          "CODE: ROYAL20",
+                          "CODE: ${featured.code}",
                           style: AppFonts.poppins(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
@@ -490,7 +503,7 @@ class _OffersScreenState extends State<OffersScreen> {
                         ),
                         const SizedBox(width: 8),
                         InkWell(
-                          onTap: () => copyCouponCode("ROYAL20"),
+                          onTap: () => copyCouponCode(featured.code),
                           child: const Icon(Icons.copy_rounded, size: 13, color: Colors.white70),
                         ),
                       ],
@@ -504,10 +517,10 @@ class _OffersScreenState extends State<OffersScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     onPressed: () {
-                      copyCouponCode("ROYAL20");
+                      copyCouponCode(featured.code);
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const CartScreen(couponCode: "ROYAL20")),
+                        MaterialPageRoute(builder: (_) => CartScreen(couponCode: featured.code)),
                       );
                     },
                     child: Text(

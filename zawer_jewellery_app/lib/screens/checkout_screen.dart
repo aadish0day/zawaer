@@ -819,7 +819,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   textCapitalization: TextCapitalization.characters,
                   style: AppFonts.poppins(fontSize: 13.5, fontWeight: FontWeight.bold),
                   decoration: InputDecoration(
-                    hintText: "Enter Privilege Code (e.g. ROYAL20)",
+                    hintText: "Enter Privilege Code",
                     hintStyle: AppFonts.poppins(fontSize: 12, color: Colors.grey),
                     prefixIcon: const Icon(Icons.card_giftcard_rounded, color: AppColors.gold, size: 20),
                     contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
