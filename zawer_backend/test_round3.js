@@ -125,6 +125,10 @@ const main = async () => {
   const afterU = await User.findById(userId).lean();
   assert.strictEqual(afterU.otpCode, before.otpCode, "first OTP kept");
   assert.strictEqual(afterU.otpAttempts, 3, "attempts not reset");
+  // A lockout clears otpCode but must not allow an instant re-issue
+  await User.updateOne({ _id: userId }, { $set: { otpCode: "", otpExpiry: null, otpAttempts: 0 } });
+  const afterLockout = await call("POST", "/api/auth/forgot-password", { email });
+  assert.strictEqual(afterLockout.data.devOtp, undefined, "no new OTP right after lockout");
   // After 60s a new one is issued
   await User.updateOne({ _id: userId }, { $set: { otpIssuedAt: new Date(Date.now() - 61000) } });
   r = await call("POST", "/api/auth/forgot-password", { email });

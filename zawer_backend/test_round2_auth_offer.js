@@ -85,6 +85,10 @@ const main = async () => {
   console.log("ok  10 parallel resets after lockout all rejected");
 
   // --- Correct flow; concurrent replays of the same OTP: exactly one wins
+  // (a new OTP isn't issued within 60s of the last one, even after a lockout)
+  const conn = await mongoose.createConnection(MONGO_URI).asPromise();
+  await conn.collection("users").updateOne({ email }, { $set: { otpIssuedAt: new Date(0) } });
+  await conn.close();
   r = await call("POST", "/api/auth/forgot-password", { email });
   const otp2 = r.data.devOtp;
   const results = await Promise.all(

@@ -723,7 +723,13 @@ class _OffersScreenState extends State<OffersScreen> {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        isExpired ? "EXPIRED" : "${offer.daysRemaining}d left",
+                        isExpired
+                            ? "EXPIRED"
+                            : offer.expiryDate == null
+                                ? "No expiry"
+                                : offer.daysRemaining > 0
+                                    ? "${offer.daysRemaining}d left"
+                                    : "${offer.hoursRemaining}h left",
                         style: AppFonts.poppins(
                           fontSize: 9.5,
                           fontWeight: FontWeight.bold,

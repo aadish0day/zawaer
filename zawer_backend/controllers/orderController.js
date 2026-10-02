@@ -341,7 +341,7 @@ const placeOrder = async (req, res) => {
         : res.status(409).json({
             success: false,
             idempotencyConflict: true,
-            message: "This checkout session has expired. Please try again.",
+            message: "An order was already placed with this checkout. Please check My Orders before ordering again.",
           });
 
     // 0. Retried checkout: return the order already created for this key

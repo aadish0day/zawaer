@@ -295,11 +295,9 @@ const forgotPassword = async (req, res) => {
     const issued = await User.findOneAndUpdate(
       {
         _id: user._id,
-        $or: [
-          { otpCode: { $in: ["", null] } },
-          { otpExpiry: { $not: { $gt: now } } },
-          { otpIssuedAt: { $not: { $gt: new Date(now.getTime() - OTP_RESEND_MS) } } },
-        ],
+        // Time-based only: a lockout that cleared otpCode must not allow an instant re-issue.
+        // (OTPs expire after 10 min, so an expired one is always past this window.)
+        otpIssuedAt: { $not: { $gt: new Date(now.getTime() - OTP_RESEND_MS) } },
       },
       {
         $set: {

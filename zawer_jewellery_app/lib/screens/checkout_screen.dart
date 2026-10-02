@@ -423,10 +423,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     Map<String, dynamic> result = await send();
 
-    // The server refuses keys older than 24h; start a fresh attempt once.
+    // 409 means an order already exists for this key (placed over 24h ago).
+    // Resending with a new key would duplicate it, so stop and point to Orders.
     if (result["statusCode"] == 409 && result["idempotencyConflict"] == true) {
-      await newKey();
-      result = await send();
+      idempotencyKey = null;
+      if (isBuyNow) await clearPendingBuyNow(prefs);
+      result = {
+        ...result,
+        "message": "This order was already placed earlier. Please check My Orders before ordering again.",
+      };
     }
 
     if (result["success"] == true) {

@@ -23,6 +23,16 @@ const call = async (method, path, body, token) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// forgot-password won't re-issue within 60s (even after a lockout). Tests skip the
+// wait by backdating otpIssuedAt in the local throwaway DB, or sleep without one.
+const allowNewOtp = async (email) => {
+  const uri = process.env.MONGO_URI || "";
+  if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)[:/]/.test(uri)) return sleep(61000);
+  const conn = await require("mongoose").createConnection(uri).asPromise();
+  await conn.collection("users").updateOne({ email }, { $set: { otpIssuedAt: new Date(0) } });
+  await conn.close();
+};
+
 const main = async () => {
   const email = `auth_test_${Date.now()}@example.com`;
   const password = "oldpass123";
@@ -60,6 +70,7 @@ const main = async () => {
   // iat has 1s resolution; make sure the reset lands in a later second than the old token
   await sleep(1100);
 
+  await allowNewOtp(email);
   r = await call("POST", "/api/auth/forgot-password", { email });
   r = await call("POST", "/api/auth/reset-password", { email, otp: r.data.devOtp, newPassword: "newpass123" });
   assert.strictEqual(r.status, 200, "reset with fresh OTP");

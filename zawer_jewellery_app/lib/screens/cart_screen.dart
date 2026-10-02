@@ -221,6 +221,11 @@ class CartScreenState extends State<CartScreen> {
           if (mounted) setState(() => isWaitingForSync = false);
         }
       }
+      // Removals aren't tracked as futures; wait (bounded by the request timeout)
+      // so checkout's cart GET can't run before a DELETE lands.
+      while (_pendingRemovals.isNotEmpty && mounted) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
       if (!mounted) return;
 
       await Navigator.push(

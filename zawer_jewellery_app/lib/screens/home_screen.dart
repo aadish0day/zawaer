@@ -96,6 +96,8 @@ class HomeScreenState extends State<HomeScreen> {
   int _wishlistRequestSeq = 0;
 
   Future<void> loadProducts() async {
+    // Can be called from a SnackBar's Retry after this screen is gone
+    if (!mounted) return;
     final int seq = ++_productsRequestSeq;
     setState(() {
       isLoadingProducts = true;
