@@ -5,6 +5,12 @@ import '../utils/colors.dart';
 import '../utils/text_styles.dart';
 import 'order_tracking_screen.dart';
 
+// Same as derivedTrackingNumber on the server: last 6 chars of _id, uppercased.
+String _derivedTrackingNumber(String? id) {
+  final String s = id ?? "000000";
+  return "ZWR-${(s.length > 6 ? s.substring(s.length - 6) : s).toUpperCase()}";
+}
+
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
@@ -38,6 +44,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
   // LOAD ORDERS FROM BACKEND (MongoDB)
   // =====================================================
   Future<void> loadOrders() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       errorMessage = "";
@@ -560,7 +568,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final List items = (order["items"] ?? []) as List;
     final String status = order["status"]?.toString() ?? "Order Placed";
     final String trackingNum = order["trackingNumber"]?.toString() ??
-        "ZWR-${order["_id"]?.toString().substring(0, 6).toUpperCase() ?? "000000"}";
+        _derivedTrackingNumber(order["_id"]?.toString());
     final String orderId = order["_id"]?.toString() ?? "";
     final Color statusColor = getStatusColor(status);
 
@@ -716,7 +724,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              "Qty: ${item["quantity"]} × ₹${item["price"] ?? 0}",
+                              "Qty: ${item["quantity"]} × ₹${_money(item["price"])}",
                               style: AppFonts.poppins(
                                 color: isDark ? Colors.white60 : Colors.black54,
                                 fontSize: 11,
@@ -747,7 +755,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      "₹${order["totalAmount"]}",
+                      "₹${_money(order["totalAmount"])}",
                       style: AppFonts.cinzel(
                         color: AppColors.brand(context),
                         fontWeight: FontWeight.bold,
@@ -938,9 +946,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  // Whole rupees, like the other screens. JSON may hold a num or a string.
+  String _money(dynamic value) =>
+      (num.tryParse(value?.toString() ?? "") ?? 0).toStringAsFixed(0);
+
   String _formatDate(String isoDate) {
     try {
-      final date = DateTime.parse(isoDate);
+      final date = DateTime.parse(isoDate).toLocal();
       return "${date.day.toString().padLeft(2, '0')}/"
           "${date.month.toString().padLeft(2, '0')}/"
           "${date.year}";

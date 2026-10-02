@@ -19,7 +19,7 @@ class TrackingStep {
     DateTime? parsedTime;
     if (json["timestamp"] != null) {
       try {
-        parsedTime = DateTime.parse(json["timestamp"].toString());
+        parsedTime = DateTime.parse(json["timestamp"].toString()).toLocal();
       } catch (_) {}
     }
 
@@ -97,14 +97,14 @@ class OrderTrackingModel {
     DateTime? estDate;
     if (json["estimatedDelivery"] != null) {
       try {
-        estDate = DateTime.parse(json["estimatedDelivery"].toString());
+        estDate = DateTime.parse(json["estimatedDelivery"].toString()).toLocal();
       } catch (_) {}
     }
 
     DateTime? createdDate;
     if (json["createdAt"] != null) {
       try {
-        createdDate = DateTime.parse(json["createdAt"].toString());
+        createdDate = DateTime.parse(json["createdAt"].toString()).toLocal();
       } catch (_) {}
     }
 

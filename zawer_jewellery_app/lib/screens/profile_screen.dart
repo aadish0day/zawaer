@@ -5,6 +5,8 @@ import '../services/api_service.dart';
 import '../utils/colors.dart';
 import '../utils/text_styles.dart';
 import '../utils/theme_controller.dart';
+import '../utils/validators.dart';
+import 'login_screen.dart';
 import 'orders_screen.dart';
 import 'order_tracking_screen.dart';
 import 'offers_screen.dart';
@@ -14,14 +16,15 @@ class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  State<ProfileScreen> createState() => ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
-  String userName = "Maison Patron";
-  String userEmail = "patron@zawer.com";
-  String userPhone = "+91 98765 43210";
-  String userAddress = "Royal Vault Residences, Mumbai";
+class ProfileScreenState extends State<ProfileScreen> {
+  bool isLoggedIn = false;
+  String userName = "";
+  String userEmail = "";
+  String userPhone = "";
+  String userAddress = "";
   int ordersCount = 0;
   int wishlistCount = 0;
   bool isLoadingStats = true;
@@ -39,6 +42,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> loadUserData() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
 
+    final bool hasToken = (prefs.getString("token") ?? "").isNotEmpty;
     final String savedName = prefs.getString("userName") ?? "";
     final String savedEmail = prefs.getString("userEmail") ?? "";
     final String savedPhone = prefs.getString("userPhone") ?? "";
@@ -47,19 +51,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!mounted) return;
 
     setState(() {
-      if (savedName.isNotEmpty) userName = savedName;
-      if (savedEmail.isNotEmpty) userEmail = savedEmail;
-      if (savedPhone.isNotEmpty) userPhone = savedPhone;
-      if (savedAddress.isNotEmpty) userAddress = savedAddress;
+      isLoggedIn = hasToken;
+      userName = savedName;
+      userEmail = savedEmail;
+      userPhone = savedPhone;
+      userAddress = savedAddress;
     });
   }
 
   Future<void> loadProfileStats() async {
+    if ((await ApiService.getToken()).isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        ordersCount = 0;
+        wishlistCount = 0;
+        isLoadingStats = false;
+      });
+      return;
+    }
+
     try {
       final ordersRes = await ApiService.getOrders();
       final wishRes = await ApiService.getWishlist();
 
       if (!mounted) return;
+
+      // Session expired / revoked: re-read prefs so the guest view shows.
+      if (ordersRes["statusCode"] == 401 || wishRes["statusCode"] == 401) {
+        await loadUserData();
+        if (!mounted) return;
+      }
 
       int oCount = 0;
       if (ordersRes["success"] == true && ordersRes["orders"] is List) {
@@ -86,11 +107,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // =====================================================
+  // SIGN IN (guest)
+  // =====================================================
+  Future<void> openSignIn() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    if (!mounted) return;
+    await reload();
+  }
+
+  // Called by BottomNavScreen when the Profile tab is selected.
+  Future<void> reload() async {
+    await Future.wait([loadUserData(), loadProfileStats()]);
+  }
+
+  // =====================================================
   // EDIT PROFILE DIALOG
   // =====================================================
   void showEditProfileDialog() {
     final nameController = TextEditingController(text: userName);
     final phoneController = TextEditingController(text: userPhone);
+    final formKey = GlobalKey<FormState>();
     bool isSaving = false;
 
     showDialog(
@@ -109,30 +148,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 "Edit Client Credentials",
                 style: AppFonts.cinzel(fontWeight: FontWeight.bold, fontSize: 18),
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    style: AppFonts.poppins(fontSize: 13.5),
-                    decoration: InputDecoration(
-                      labelText: "Full Name",
-                      prefixIcon: const Icon(Icons.person_outline, color: AppColors.gold),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: nameController,
+                      maxLength: maxNameLength,
+                      validator: validateName,
+                      style: AppFonts.poppins(fontSize: 13.5),
+                      decoration: InputDecoration(
+                        labelText: "Full Name",
+                        counterText: "",
+                        prefixIcon: const Icon(Icons.person_outline, color: AppColors.gold),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: phoneController,
-                    keyboardType: TextInputType.phone,
-                    style: AppFonts.poppins(fontSize: 13.5),
-                    decoration: InputDecoration(
-                      labelText: "Phone Number",
-                      prefixIcon: const Icon(Icons.phone_outlined, color: AppColors.gold),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: phoneController,
+                      keyboardType: TextInputType.phone,
+                      maxLength: maxPhoneLength,
+                      validator: (value) {
+                        final phone = value?.trim() ?? "";
+                        if (phone.isNotEmpty && !isValidPhone(phone)) {
+                          return "Enter a valid phone number";
+                        }
+                        return null;
+                      },
+                      style: AppFonts.poppins(fontSize: 13.5),
+                      decoration: InputDecoration(
+                        labelText: "Phone Number",
+                        counterText: "",
+                        prefixIcon: const Icon(Icons.phone_outlined, color: AppColors.gold),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -147,36 +201,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onPressed: isSaving
                       ? null
                       : () async {
+                          if (!formKey.currentState!.validate()) return;
                           HapticFeedback.selectionClick();
+                          // Page-level messenger: the dialog's own context is gone after pop.
+                          final messenger = ScaffoldMessenger.of(this.context);
+                          // Read before awaiting: the controllers are disposed
+                          // if the dialog is dismissed mid-save.
+                          final String name = nameController.text.trim();
+                          final String phone = phoneController.text.trim();
                           setDialogState(() {
                             isSaving = true;
                           });
 
                           final result = await ApiService.updateProfile(
-                            name: nameController.text.trim(),
-                            phone: phoneController.text.trim(),
+                            name: name,
+                            phone: phone,
                           );
 
                           if (result["success"] == true) {
                             final SharedPreferences prefs = await SharedPreferences.getInstance();
-                            await prefs.setString("userName", nameController.text.trim());
-                            await prefs.setString("userPhone", phoneController.text.trim());
+                            await prefs.setString("userName", name);
+                            await prefs.setString("userPhone", phone);
                           }
 
-                          if (!dialogContext.mounted) return;
-                          Navigator.pop(dialogContext);
+                          // The dialog may already be gone (back / tap outside);
+                          // the screen still needs the reload and the snackbar.
+                          if (dialogContext.mounted) Navigator.pop(dialogContext);
 
                           if (!mounted) return;
 
-                          if (result["success"] == true) {
-                            loadUserData();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                behavior: SnackBarBehavior.floating,
-                                content: Text("Credentials updated successfully"),
+                          final bool success = result["success"] == true;
+                          // A 401 already cleared auth inside ApiService; reload
+                          // either way so the screen reflects the real state.
+                          loadUserData();
+                          messenger.showSnackBar(
+                            SnackBar(
+                              behavior: SnackBarBehavior.floating,
+                              backgroundColor: success ? null : Colors.red,
+                              content: Text(
+                                success
+                                    ? "Credentials updated successfully"
+                                    : result["statusCode"] == 401
+                                        ? "Session expired. Please sign in again."
+                                        : result["message"]?.toString() ?? "Could not update profile",
                               ),
-                            );
-                          }
+                            ),
+                          );
                         },
                   child: isSaving
                       ? const SizedBox(
@@ -280,12 +350,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // LOGOUT
   // =====================================================
   Future<void> logoutUser() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.remove("token");
-    await prefs.remove("userId");
-    await prefs.remove("userName");
-    await prefs.remove("userEmail");
-    await prefs.remove("userPhone");
+    await ApiService.clearAuth();
 
     if (!mounted) return;
 
@@ -416,12 +481,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 8),
               buildHubGroup([
                 buildThemeToggleItem(isDark),
-                buildHubItem(
-                  icon: Icons.badge_outlined,
-                  title: "Client Credentials",
-                  subtitle: "Edit name and verified phone",
-                  onTap: showEditProfileDialog,
-                ),
+                if (isLoggedIn)
+                  buildHubItem(
+                    icon: Icons.badge_outlined,
+                    title: "Client Credentials",
+                    subtitle: "Edit name and verified phone",
+                    onTap: showEditProfileDialog,
+                  ),
                 buildHubItem(
                   icon: Icons.diamond_outlined,
                   title: "Bespoke Engraving & Consultation",
@@ -430,8 +496,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ], isDark),
               const SizedBox(height: 20),
-              // 5. Sign Out Button
-              buildSignOutButton(isDark),
+              // 5. Sign Out Button (Sign In for guests)
+              isLoggedIn ? buildSignOutButton(isDark) : buildSignInButton(),
               const SizedBox(height: 32),
               // 6. Maison Seal & Heritage Footer
               buildMaisonHeritageFooter(isDark),
@@ -474,11 +540,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.edit_outlined, size: 20),
-          tooltip: "Edit Profile",
-          onPressed: showEditProfileDialog,
-        ),
+        if (isLoggedIn)
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            tooltip: "Edit Profile",
+            onPressed: showEditProfileDialog,
+          ),
         const SizedBox(width: 4),
       ],
     );
@@ -537,7 +604,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     child: Center(
                       child: Text(
-                        userName.isNotEmpty ? userName[0].toUpperCase() : "Z",
+                        isLoggedIn && userName.isNotEmpty ? userName[0].toUpperCase() : "Z",
                         style: AppFonts.cinzel(
                           fontSize: 26,
                           fontWeight: FontWeight.bold,
@@ -564,7 +631,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         ),
                         child: Text(
-                          "HERITAGE PATRON • TIER I",
+                          isLoggedIn ? "HERITAGE PATRON • TIER I" : "GUEST",
                           style: AppFonts.poppins(
                             fontSize: 8.5,
                             fontWeight: FontWeight.bold,
@@ -575,7 +642,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        userName,
+                        isLoggedIn ? (userName.isNotEmpty ? userName : "Client") : "Welcome, Guest",
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppFonts.cinzel(
@@ -586,7 +653,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        userEmail,
+                        isLoggedIn ? userEmail : "Sign in to view your orders and details",
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppFonts.poppins(
@@ -599,36 +666,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ],
             ),
-            const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.phone_outlined, size: 14, color: AppColors.gold),
-                    const SizedBox(width: 6),
-                    Text(
-                      userPhone.isNotEmpty ? userPhone : "No phone registered",
+            if (isLoggedIn) ...[
+              const Divider(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.phone_outlined, size: 14, color: AppColors.gold),
+                      const SizedBox(width: 6),
+                      Text(
+                        userPhone.isNotEmpty ? userPhone : "No phone registered",
+                        style: AppFonts.poppins(
+                          fontSize: 11.5,
+                          color: isDark ? Colors.white60 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                  InkWell(
+                    onTap: showEditProfileDialog,
+                    child: Text(
+                      "Edit Details →",
                       style: AppFonts.poppins(
                         fontSize: 11.5,
-                        color: isDark ? Colors.white60 : Colors.black54,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.brand(context),
                       ),
                     ),
-                  ],
-                ),
-                InkWell(
-                  onTap: showEditProfileDialog,
-                  child: Text(
-                    "Edit Details →",
-                    style: AppFonts.poppins(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.brand(context),
-                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -885,6 +954,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         icon: const Icon(Icons.logout_rounded, size: 16),
         label: Text(
           "SIGN OUT OF MAISON SESSION",
+          style: AppFonts.poppins(
+            fontSize: 11.5,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildSignInButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          minimumSize: const Size(double.infinity, 48),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        onPressed: openSignIn,
+        icon: const Icon(Icons.login_rounded, size: 16),
+        label: Text(
+          "SIGN IN TO MAISON",
           style: AppFonts.poppins(
             fontSize: 11.5,
             fontWeight: FontWeight.bold,

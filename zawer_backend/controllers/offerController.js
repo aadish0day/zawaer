@@ -1,49 +1,66 @@
 const Offer = require("../models/Offer");
 const Product = require("../models/Product");
+const Order = require("../models/Order");
+const {
+  priceItems,
+  eligibleSubtotalFor,
+  isAllCategories,
+  round2,
+} = require("./orderController");
+
+const MAX_ITEMS = 50;
+
+// Public shape shared by the list and single-offer endpoints (no usage internals).
+// A missing expiryDate means no expiry.
+const formatOffer = (offer, now = new Date()) => {
+  const hasExpiry = offer.expiryDate instanceof Date;
+  const isExpired = offer.isExpired();
+  const msRemaining = hasExpiry ? Math.max(0, offer.expiryDate.getTime() - now.getTime()) : null;
+  const daysRemaining = hasExpiry ? Math.floor(msRemaining / (1000 * 60 * 60 * 24)) : null;
+  const hoursRemaining = hasExpiry
+    ? Math.floor((msRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    : null;
+
+  const isValid =
+    offer.isActive &&
+    !isExpired &&
+    !(offer.startDate && now < offer.startDate) &&
+    // null / <= 0 = unlimited, same as checkout
+    (!(offer.usageLimit > 0) || offer.usedCount < offer.usageLimit);
+
+  return {
+    id: offer._id,
+    code: offer.code,
+    title: offer.title,
+    description: offer.description,
+    discountType: offer.discountType,
+    discountValue: offer.discountValue,
+    maxDiscount: offer.maxDiscount,
+    minOrderAmount: offer.minOrderAmount,
+    applicableCategory: offer.applicableCategory,
+    startDate: offer.startDate,
+    expiryDate: offer.expiryDate ?? null,
+    isExpired,
+    daysRemaining,
+    hoursRemaining,
+    isValid,
+    tag: offer.tag,
+    bannerImage: offer.bannerImage,
+    terms: offer.terms,
+  };
+};
 
 // =========================================================
 // GET ALL ACTIVE OFFERS & PROMOTIONS
 // =========================================================
 exports.getAllOffers = async (req, res) => {
   try {
+    // Missing isActive = active (schema default). `now` is taken after loading, since a
+    // missing startDate is filled with Date.now on load and must not be in the future.
+    const offers = await Offer.find({ isActive: { $ne: false } }).sort({ createdAt: -1 });
     const now = new Date();
-    const offers = await Offer.find({ isActive: true }).sort({ createdAt: -1 });
 
-    const formattedOffers = offers.map((offer) => {
-      const isExpired = now > offer.expiryDate;
-      const msRemaining = Math.max(0, offer.expiryDate.getTime() - now.getTime());
-      const daysRemaining = Math.floor(msRemaining / (1000 * 60 * 60 * 24));
-      const hoursRemaining = Math.floor(
-        (msRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-      );
-
-      const isValid =
-        offer.isActive &&
-        !isExpired &&
-        (offer.usageLimit === 0 || offer.usedCount < offer.usageLimit);
-
-      return {
-        id: offer._id,
-        code: offer.code,
-        title: offer.title,
-        description: offer.description,
-        discountType: offer.discountType,
-        discountValue: offer.discountValue,
-        maxDiscount: offer.maxDiscount,
-        minOrderAmount: offer.minOrderAmount,
-        applicableCategory: offer.applicableCategory,
-        startDate: offer.startDate,
-        expiryDate: offer.expiryDate,
-        isExpired,
-        daysRemaining,
-        hoursRemaining,
-        isValid,
-        tag: offer.tag,
-        bannerImage: offer.bannerImage,
-        terms: offer.terms,
-        usedCount: offer.usedCount,
-      };
-    });
+    const formattedOffers = offers.map((offer) => formatOffer(offer, now));
 
     res.status(200).json({
       success: true,
@@ -51,10 +68,10 @@ exports.getAllOffers = async (req, res) => {
       offers: formattedOffers,
     });
   } catch (error) {
+    console.error("Get Offers Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to retrieve offers",
-      error: error.message,
     });
   }
 };
@@ -69,7 +86,9 @@ exports.getDiscountedProducts = async (req, res) => {
         { isSpecialOffer: true },
         { discountPercentage: { $gt: 0 } },
       ],
-    }).sort({ discountPercentage: -1 });
+    })
+      .select("-reviews")
+      .sort({ discountPercentage: -1 });
 
     res.status(200).json({
       success: true,
@@ -77,10 +96,10 @@ exports.getDiscountedProducts = async (req, res) => {
       products: discountedProducts,
     });
   } catch (error) {
+    console.error("Get Discounted Products Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch discounted products",
-      error: error.message,
     });
   }
 };
@@ -90,7 +109,7 @@ exports.getDiscountedProducts = async (req, res) => {
 // =========================================================
 exports.validateCoupon = async (req, res) => {
   try {
-    const { couponCode, subtotal = 0, category } = req.body;
+    const { couponCode, subtotal = 0, category, items } = req.body;
 
     if (!couponCode || typeof couponCode !== "string" || !couponCode.trim()) {
       return res.status(400).json({
@@ -100,7 +119,28 @@ exports.validateCoupon = async (req, res) => {
     }
 
     const code = couponCode.trim().toUpperCase();
-    const orderSubtotal = Number(subtotal) || 0;
+    let orderSubtotal = Number(subtotal) || 0;
+
+    // Preferred: price { productId, quantity } items from the DB so the preview matches checkout.
+    // Without items, fall back to the client-supplied subtotal/category (legacy callers).
+    let lines = null;
+    if (items != null && (!Array.isArray(items) || items.length > MAX_ITEMS)) {
+      return res.status(400).json({
+        success: false,
+        message: `items must be an array of at most ${MAX_ITEMS} entries`,
+      });
+    }
+    if (Array.isArray(items) && items.length > 0) {
+      const priced = await priceItems(items);
+      if (priced.error) {
+        return res.status(400).json({
+          success: false,
+          message: priced.error,
+        });
+      }
+      orderSubtotal = priced.subtotal;
+      lines = priced.lines;
+    }
 
     const offer = await Offer.findOne({ code });
 
@@ -120,8 +160,8 @@ exports.validateCoupon = async (req, res) => {
 
     const now = new Date();
 
-    // Expiry Check
-    if (now > offer.expiryDate) {
+    // Expiry Check (missing expiryDate = no expiry, same as checkout)
+    if (offer.isExpired()) {
       const expStr = offer.expiryDate.toLocaleDateString("en-IN", {
         day: "2-digit",
         month: "short",
@@ -150,21 +190,37 @@ exports.validateCoupon = async (req, res) => {
       });
     }
 
-    // Minimum Order Amount Check
-    if (orderSubtotal < offer.minOrderAmount) {
-      return res.status(400).json({
-        success: false,
-        minOrderAmount: offer.minOrderAmount,
-        message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
+    // Per-user limit (signed-in callers only; checkout enforces it regardless)
+    if (offer.perUserLimit > 0 && req.user) {
+      const userUses = await Order.countDocuments({
+        userId: req.user.id,
+        couponCode: code,
+        status: { $ne: "Cancelled" },
       });
+      if (userUses >= offer.perUserLimit) {
+        return res.status(400).json({
+          success: false,
+          message: `Coupon code '${code}' has already been used on your account`,
+        });
+      }
     }
 
-    // Category Restriction Check
-    if (
-      offer.applicableCategory &&
-      offer.applicableCategory !== "All" &&
-      category &&
-      offer.applicableCategory.toLowerCase() !== category.toLowerCase()
+    // Category Restriction Check (eligibleSubtotal = value of matching items only)
+    let eligibleSubtotal = orderSubtotal;
+    if (lines) {
+      eligibleSubtotal = eligibleSubtotalFor(offer, lines);
+      if (!isAllCategories(offer.applicableCategory) && eligibleSubtotal <= 0) {
+        return res.status(400).json({
+          success: false,
+          applicableCategory: offer.applicableCategory,
+          message: `Code '${code}' is only applicable to ${offer.applicableCategory} collections`,
+        });
+      }
+    } else if (
+      !isAllCategories(offer.applicableCategory) &&
+      typeof category === "string" &&
+      category.trim() &&
+      offer.applicableCategory.trim().toLowerCase() !== category.trim().toLowerCase()
     ) {
       return res.status(400).json({
         success: false,
@@ -173,21 +229,20 @@ exports.validateCoupon = async (req, res) => {
       });
     }
 
-    // Calculate Discount
-    let discountAmount = 0;
-    if (offer.discountType === "percentage") {
-      const rawDiscount = (orderSubtotal * offer.discountValue) / 100;
-      if (offer.maxDiscount > 0) {
-        discountAmount = Math.min(rawDiscount, offer.maxDiscount);
-      } else {
-        discountAmount = rawDiscount;
-      }
-    } else if (offer.discountType === "flat") {
-      discountAmount = Math.min(offer.discountValue, orderSubtotal);
+    // Minimum Order Amount Check
+    if (eligibleSubtotal < offer.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        minOrderAmount: offer.minOrderAmount,
+        message: `Minimum vault order valuation of ₹${offer.minOrderAmount.toLocaleString()} is required for code '${code}'`,
+      });
     }
 
-    discountAmount = Math.round(discountAmount);
-    const finalAmount = Math.max(0, orderSubtotal - discountAmount);
+    // Calculate Discount (same method checkout uses)
+    const discountAmount = round2(offer.calculateDiscount(eligibleSubtotal));
+    const finalAmount = round2(Math.max(0, orderSubtotal - discountAmount));
+    orderSubtotal = round2(orderSubtotal);
+    eligibleSubtotal = round2(eligibleSubtotal);
 
     res.status(200).json({
       success: true,
@@ -201,16 +256,17 @@ exports.validateCoupon = async (req, res) => {
         maxDiscount: offer.maxDiscount,
         minOrderAmount: offer.minOrderAmount,
         subtotal: orderSubtotal,
+        eligibleSubtotal,
         finalAmount,
         savings: discountAmount,
-        expiryDate: offer.expiryDate,
+        expiryDate: offer.expiryDate ?? null,
       },
     });
   } catch (error) {
+    console.error("Validate Coupon Error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to validate coupon code",
-      error: error.message,
     });
   }
 };
@@ -221,7 +277,7 @@ exports.validateCoupon = async (req, res) => {
 exports.getOfferByCode = async (req, res) => {
   try {
     const code = req.params.code.trim().toUpperCase();
-    const offer = await Offer.findOne({ code });
+    const offer = await Offer.findOne({ code, isActive: { $ne: false } });
 
     if (!offer) {
       return res.status(404).json({
@@ -230,21 +286,15 @@ exports.getOfferByCode = async (req, res) => {
       });
     }
 
-    const now = new Date();
-    const isExpired = now > offer.expiryDate;
-
     res.status(200).json({
       success: true,
-      offer: {
-        ...offer.toObject(),
-        isExpired,
-      },
+      offer: formatOffer(offer),
     });
   } catch (error) {
+    console.error("Get Offer Error:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching offer",
-      error: error.message,
     });
   }
 };

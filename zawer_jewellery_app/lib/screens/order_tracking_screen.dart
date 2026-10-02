@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/order_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
@@ -21,6 +22,7 @@ class OrderTrackingScreen extends StatefulWidget {
 class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     with SingleTickerProviderStateMixin {
   bool isLoading = true;
+  bool isAdmin = false;
   String? errorMessage;
   OrderTrackingModel? trackingData;
   late AnimationController _pulseController;
@@ -89,6 +91,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     );
 
     loadTrackingData();
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) setState(() => isAdmin = prefs.getString("userRole") == "admin");
+    });
   }
 
   @override
@@ -97,7 +102,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     super.dispose();
   }
 
+  // Only the latest load may apply its result; a slower earlier response
+  // (e.g. pre-status-change) must not overwrite newer data.
+  int _loadSeq = 0;
+
   Future<void> loadTrackingData() async {
+    if (!mounted) return;
+    final int seq = ++_loadSeq;
     setState(() {
       isLoading = true;
       errorMessage = null;
@@ -105,7 +116,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
 
     final result = await ApiService.getOrderTracking(widget.orderId);
 
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
 
     if (result["success"] == true && result["tracking"] != null) {
       setState(() {
@@ -122,7 +133,20 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     }
   }
 
+  // Blocks a second status change while one is in flight.
+  bool isAdvancing = false;
+
   Future<void> advanceToStatus(String status) async {
+    if (isAdvancing) return;
+    isAdvancing = true;
+    try {
+      await _advanceToStatus(status);
+    } finally {
+      isAdvancing = false;
+    }
+  }
+
+  Future<void> _advanceToStatus(String status) async {
     HapticFeedback.mediumImpact();
     final messenger = ScaffoldMessenger.of(context);
 
@@ -189,8 +213,17 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
     }
   }
 
+  bool get isOrderCancelled => trackingData?.currentStatus == "Cancelled";
+
   int get currentStageIndex {
     if (trackingData == null) return 0;
+    // Cancelled isn't a stage: show the last stage actually reached
+    if (isOrderCancelled) {
+      final reached = stageMetadata.lastIndexWhere((s) => trackingData!.timeline.any(
+            (t) => t.isCompleted && t.status.toLowerCase() == s["status"].toString().toLowerCase(),
+          ));
+      return reached != -1 ? reached : 0;
+    }
     final normalized = trackingData!.currentStatus == "Placed"
         ? "Order Placed"
         : trackingData!.currentStatus;
@@ -198,6 +231,37 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
       (s) => s["status"].toString().toLowerCase() == normalized.toLowerCase(),
     );
     return idx != -1 ? idx : 0;
+  }
+
+  // Only forward moves, plus cancel while the order is still open.
+  List<Map<String, dynamic>> get simulatorOptions {
+    final status = trackingData?.currentStatus ?? "";
+    if (isOrderCancelled || status == "Delivered") return const [];
+    return [
+      ...stageMetadata.skip(currentStageIndex + 1),
+      {"status": "Cancelled", "icon": Icons.cancel_outlined},
+    ];
+  }
+
+  Future<bool> _confirmCancel(BuildContext ctx) async {
+    final confirmed = await showDialog<bool>(
+      context: ctx,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Cancel this order?"),
+        content: const Text("Cancelling is final and cannot be undone."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text("Keep Order"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text("Cancel Order", style: TextStyle(color: Color(0xFFC62828))),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
   }
 
   void showSimulationBottomSheet() {
@@ -261,57 +325,59 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                   ],
                 ),
                 const SizedBox(height: 20),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: stageMetadata.map((stage) {
-                    final stageName = stage["status"] as String;
-                    final isSelected =
-                        trackingData?.currentStatus.toLowerCase() == stageName.toLowerCase();
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        advanceToStatus(stageName);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppColors.gold
-                              : (isDark ? const Color(0xFF222228) : const Color(0xFFF7F5F0)),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.gold
-                                : (isDark ? Colors.white12 : Colors.black12),
+                if (simulatorOptions.isEmpty)
+                  Text(
+                    "This order is final; no further status changes.",
+                    style: AppFonts.poppins(fontSize: 12, color: Colors.grey),
+                  )
+                else
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: simulatorOptions.map((stage) {
+                      final stageName = stage["status"] as String;
+                      final isCancel = stageName == "Cancelled";
+                      final accent = isCancel ? const Color(0xFFC62828) : AppColors.gold;
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () async {
+                          if (isCancel && !await _confirmCancel(ctx)) return;
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          advanceToStatus(stageName);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF222228) : const Color(0xFFF7F5F0),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: isCancel
+                                  ? accent.withValues(alpha: 0.5)
+                                  : (isDark ? Colors.white12 : Colors.black12),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(stage["icon"] as IconData, size: 14, color: accent),
+                              const SizedBox(width: 6),
+                              Text(
+                                stageName,
+                                style: AppFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: isCancel
+                                      ? accent
+                                      : (isDark ? Colors.white : Colors.black87),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              stage["icon"] as IconData,
-                              size: 14,
-                              color: isSelected ? Colors.black : AppColors.gold,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              stageName,
-                              style: AppFonts.poppins(
-                                fontSize: 12,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                color: isSelected
-                                    ? Colors.black
-                                    : (isDark ? Colors.white : Colors.black87),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
+                      );
+                    }).toList(),
+                  ),
                 const SizedBox(height: 16),
               ],
             ),
@@ -376,11 +442,12 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.tune_rounded, size: 20, color: AppColors.gold),
-            tooltip: "Vault Simulator",
-            onPressed: showSimulationBottomSheet,
-          ),
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.tune_rounded, size: 20, color: AppColors.gold),
+              tooltip: "Vault Simulator",
+              onPressed: showSimulationBottomSheet,
+            ),
           IconButton(
             icon: const Icon(Icons.refresh, size: 20),
             tooltip: "Refresh",
@@ -438,7 +505,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                             const SizedBox(height: 16),
                             buildJewelleryPiecesCard(),
                             const SizedBox(height: 28),
-                            buildDiscreetSimulatorButton(),
+                            if (isAdmin) buildDiscreetSimulatorButton(),
                             const SizedBox(height: 36),
                           ],
                         ),
@@ -826,12 +893,12 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
                 ],
               ),
               Text(
-                "${currentStageIndex + 1}/6 COMPLETED",
+                isOrderCancelled ? "CANCELLED" : "${currentStageIndex + 1}/6 COMPLETED",
                 style: AppFonts.poppins(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.2,
-                  color: AppColors.gold,
+                  color: isOrderCancelled ? const Color(0xFFC62828) : AppColors.gold,
                 ),
               ),
             ],
@@ -860,7 +927,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen>
               );
 
               final isCompleted = index <= currentStageIndex;
-              final isCurrent = index == currentStageIndex;
+              final isCurrent = !isOrderCancelled && index == currentStageIndex;
               final isLast = index == stageMetadata.length - 1;
 
               return Row(

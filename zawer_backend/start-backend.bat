@@ -22,6 +22,9 @@ if not exist ".env" (
     if exist ".env.example" (
         echo [INFO] .env not found. Creating .env from .env.example...
         copy .env.example .env >nul
+        echo [ACTION] Edit .env and set JWT_SECRET to a random value, e.g. the output of:
+        echo          node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+        echo          The server will not start until you do.
     )
 )
 

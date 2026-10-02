@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 
@@ -107,6 +108,11 @@ class _LoginScreenState extends State<LoginScreen> {
             "userPhone",
             userData["phone"]?.toString() ?? "",
           );
+
+          await prefs.setString(
+            "userRole",
+            userData["role"]?.toString() ?? "user",
+          );
         }
 
         // Remember Me
@@ -129,11 +135,15 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
 
-        // Go to Bottom Navigation
-        Navigator.pushReplacementNamed(
-          context,
-          "/bottomNav",
-        );
+        // Pushed from inside the app: return there. Root: go to Bottom Navigation.
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context, true);
+        } else {
+          Navigator.pushReplacementNamed(
+            context,
+            "/bottomNav",
+          );
+        }
 
         return;
       }
@@ -179,7 +189,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
+      canPop: Navigator.of(context).canPop(),
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         SystemNavigator.pop();
@@ -329,11 +339,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               "Please enter your email";
                           }
 
-                          if (!RegExp(
-                            r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,4}$',
-                          ).hasMatch(
-                            value.trim(),
-                          )) {
+                          if (!isValidEmail(value)) {
                             return
                               "Enter a valid email";
                           }
@@ -397,11 +403,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               value.isEmpty) {
                             return
                               "Password is required";
-                          }
-
-                          if (value.length < 6) {
-                            return
-                              "Password must contain at least 6 characters";
                           }
 
                           return null;
@@ -693,6 +694,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
                       TextButton(
                         onPressed: () {
+                          if (Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                            return;
+                          }
                           Navigator
                               .pushReplacementNamed(
                             context,

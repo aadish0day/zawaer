@@ -116,4 +116,12 @@ productSchema.pre("validate", function () {
   }
 });
 
+// Clients send the custom string `id`; placeOrder also accepts the Mongo _id.
+productSchema.statics.findByAnyId = function (rawId) {
+  const pid = String(rawId).trim();
+  const or = [{ id: pid }];
+  if (mongoose.Types.ObjectId.isValid(pid)) or.push({ _id: pid });
+  return this.findOne({ $or: or });
+};
+
 module.exports = mongoose.model("Product", productSchema);

@@ -3,6 +3,7 @@ import '../utils/text_styles.dart';
 
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -244,6 +245,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       TextFormField(
                         controller: nameController,
 
+                        maxLength: maxNameLength,
+
                         textCapitalization:
                         TextCapitalization.words,
 
@@ -254,24 +257,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           prefixIcon: const Icon(
                             Icons.person_outline,
                           ),
+                          counterText: "",
                           border: OutlineInputBorder(
                             borderRadius:
                             BorderRadius.circular(15),
                           ),
                         ),
 
-                        validator: (value) {
-                          if (value == null ||
-                              value.trim().isEmpty) {
-                            return "Please enter your full name";
-                          }
-
-                          if (value.trim().length < 2) {
-                            return "Enter a valid name";
-                          }
-
-                          return null;
-                        },
+                        validator: validateName,
                       ),
 
                       const SizedBox(height: 18),
@@ -279,6 +272,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       // EMAIL
                       TextFormField(
                         controller: emailController,
+
+                        maxLength: maxEmailLength,
 
                         keyboardType:
                         TextInputType.emailAddress,
@@ -290,6 +285,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           prefixIcon: const Icon(
                             Icons.email_outlined,
                           ),
+                          counterText: "",
                           border: OutlineInputBorder(
                             borderRadius:
                             BorderRadius.circular(15),
@@ -302,13 +298,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             return "Please enter your email";
                           }
 
-                          final emailRegex = RegExp(
-                            r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,4}$',
-                          );
-
-                          if (!emailRegex.hasMatch(
-                            value.trim(),
-                          )) {
+                          if (!isValidEmail(value)) {
                             return "Enter a valid email";
                           }
 
@@ -325,10 +315,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         keyboardType:
                         TextInputType.phone,
 
-                        maxLength: 10,
+                        maxLength: maxPhoneLength,
 
                         decoration: InputDecoration(
-                          labelText: "Phone Number",
+                          labelText: "Phone Number (optional)",
                           hintText:
                           "Enter your phone number",
                           prefixIcon: const Icon(
@@ -344,13 +334,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         validator: (value) {
                           if (value == null ||
                               value.trim().isEmpty) {
-                            return "Please enter your phone number";
+                            return null;
                           }
 
-                          if (!RegExp(
-                            r'^[0-9]{10}$',
-                          ).hasMatch(value.trim())) {
-                            return "Enter a valid 10-digit phone number";
+                          if (!isValidPhone(value)) {
+                            return "Enter a valid phone number";
                           }
 
                           return null;
@@ -366,6 +354,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                         obscureText: hidePassword,
 
+                        maxLength: maxPasswordLength,
+
                         decoration: InputDecoration(
                           labelText: "Password",
                           hintText:
@@ -374,6 +364,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           prefixIcon: const Icon(
                             Icons.lock_outline,
                           ),
+                          counterText: "",
 
                           suffixIcon: IconButton(
                             icon: Icon(
@@ -396,18 +387,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                         ),
 
-                        validator: (value) {
-                          if (value == null ||
-                              value.isEmpty) {
-                            return "Password is required";
-                          }
-
-                          if (value.length < 6) {
-                            return "Password should contain at least 6 characters";
-                          }
-
-                          return null;
-                        },
+                        validator: validateNewPassword,
                       ),
 
                       const SizedBox(height: 18),

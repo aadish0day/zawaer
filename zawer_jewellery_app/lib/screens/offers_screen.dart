@@ -100,6 +100,8 @@ class _OffersScreenState extends State<OffersScreen> {
         isLoading = false;
         errorMessage = "";
       });
+      // Re-run the calculator against the real offer terms.
+      _recalculateSimulation();
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -121,33 +123,28 @@ class _OffersScreenState extends State<OffersScreen> {
       return;
     }
 
-    final offer = offers.firstWhere(
-      (o) => o.code == selectedCalcCoupon,
-      orElse: () => OfferModel(
-        id: "",
-        code: selectedCalcCoupon!,
-        title: "",
-        description: "",
-        discountType: "percentage",
-        discountValue: 20,
-        maxDiscount: 10000,
-        minOrderAmount: 25000,
-        applicableCategory: "All",
-        isExpired: false,
-        daysRemaining: 10,
-        hoursRemaining: 0,
-        isValid: true,
-        tag: "",
-        bannerImage: "",
-        terms: [],
-      ),
-    );
+    final matches = offers.where((o) => o.code == selectedCalcCoupon);
+    if (matches.isEmpty) {
+      setState(() {
+        simulatedDiscount = 0.0;
+        simulatedFinalAmount = subtotal;
+        calcMessage = "Select an available privilege coupon";
+      });
+      return;
+    }
+    final offer = matches.first;
+
+    // No cart here: for a category-limited coupon the entered amount stands
+    // for the value of eligible items, which is what the server discounts.
+    final String scope =
+        offer.isCategoryLimited ? " on eligible ${offer.applicableCategory} items" : "";
 
     if (subtotal < offer.minOrderAmount) {
       setState(() {
         simulatedDiscount = 0.0;
         simulatedFinalAmount = subtotal;
-        calcMessage = "Minimum cart valuation of ₹${offer.minOrderAmount.toStringAsFixed(0)} required";
+        calcMessage =
+            "Minimum valuation of ₹${offer.minOrderAmount.toStringAsFixed(0)}$scope required";
       });
       return;
     }
@@ -156,7 +153,7 @@ class _OffersScreenState extends State<OffersScreen> {
     setState(() {
       simulatedDiscount = disc;
       simulatedFinalAmount = subtotal - disc;
-      calcMessage = "You save ₹${disc.toStringAsFixed(0)} with '${offer.code}'!";
+      calcMessage = "You save ₹${disc.toStringAsFixed(0)}$scope with '${offer.code}'!";
     });
   }
 
@@ -726,7 +723,13 @@ class _OffersScreenState extends State<OffersScreen> {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        isExpired ? "EXPIRED" : "${offer.daysRemaining}d left",
+                        isExpired
+                            ? "EXPIRED"
+                            : offer.expiryDate == null
+                                ? "No expiry"
+                                : offer.daysRemaining > 0
+                                    ? "${offer.daysRemaining}d left"
+                                    : "${offer.hoursRemaining}h left",
                         style: AppFonts.poppins(
                           fontSize: 9.5,
                           fontWeight: FontWeight.bold,
@@ -789,14 +792,14 @@ class _OffersScreenState extends State<OffersScreen> {
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isExpired ? Colors.grey.shade800 : AppColors.primary,
+                    backgroundColor: offer.isValid ? AppColors.primary : Colors.grey.shade800,
                     foregroundColor: Colors.white,
                     elevation: 0,
                     minimumSize: const Size(110, 34),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  onPressed: isExpired
+                  onPressed: !offer.isValid
                       ? null
                       : () {
                           copyCouponCode(offer.code);
@@ -806,7 +809,11 @@ class _OffersScreenState extends State<OffersScreen> {
                           );
                         },
                   child: Text(
-                    isExpired ? "EXPIRED" : "APPLY IN BAG",
+                    isExpired
+                        ? "EXPIRED"
+                        : offer.isValid
+                            ? "APPLY IN BAG"
+                            : "UNAVAILABLE",
                     style: AppFonts.poppins(fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ),

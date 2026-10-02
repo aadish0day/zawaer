@@ -1,3 +1,5 @@
+import 'dart:math';
+
 class OfferModel {
   final String id;
   final String code;
@@ -47,29 +49,38 @@ class OfferModel {
     }
   }
 
+  // Same rule as the server's isAllCategories: blank or "All" means unrestricted.
+  bool get isCategoryLimited {
+    final c = applicableCategory.trim().toLowerCase();
+    return c.isNotEmpty && c != "all";
+  }
+
   String get minOrderText {
     if (minOrderAmount <= 0) return "No minimum order";
     return "On orders above ₹${minOrderAmount.toStringAsFixed(0)}";
   }
 
+  // Mirrors Offer.calculateDiscount on the server exactly: round, then cap
+  // at the order amount (roundToDouble == Math.round for non-negatives).
   double calculateDiscount(double subtotal) {
     if (subtotal < minOrderAmount) return 0.0;
+    double discount = 0.0;
     if (discountType == "percentage") {
-      final raw = (subtotal * discountValue) / 100.0;
-      if (maxDiscount > 0 && raw > maxDiscount) {
-        return maxDiscount;
+      discount = (subtotal * discountValue) / 100.0;
+      if (maxDiscount > 0 && discount > maxDiscount) {
+        discount = maxDiscount;
       }
-      return raw;
-    } else {
-      return discountValue > subtotal ? subtotal : discountValue;
+    } else if (discountType == "flat") {
+      discount = discountValue;
     }
+    return min(max(0.0, discount).roundToDouble(), max(0.0, subtotal));
   }
 
   factory OfferModel.fromJson(Map<String, dynamic> json) {
     DateTime? exp;
     if (json["expiryDate"] != null) {
       try {
-        exp = DateTime.parse(json["expiryDate"].toString());
+        exp = DateTime.parse(json["expiryDate"].toString()).toLocal();
       } catch (_) {}
     }
 

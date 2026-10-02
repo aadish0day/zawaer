@@ -1,18 +1,86 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
 import '../utils/text_styles.dart';
+import '../utils/validators.dart';
 import 'order_tracking_screen.dart';
 import 'offers_screen.dart';
+
+// Delivery field rules, mirroring POST /api/orders validation.
+const int maxAddressLength = 500;
+
+String? validateCheckoutName(String? value) {
+  final v = value?.trim() ?? "";
+  if (v.isEmpty) return "Please enter the recipient's name";
+  if (codePointLength(v) > maxNameLength) return "Name must be $maxNameLength characters or fewer";
+  return null;
+}
+
+String? validateCheckoutPhone(String? value) {
+  final v = value?.trim() ?? "";
+  if (v.isEmpty) return "Please enter a phone number";
+  if (v.length > maxPhoneLength || !isValidPhone(v)) {
+    return "Enter a valid phone number (digits, spaces, +, - or brackets)";
+  }
+  return null;
+}
+
+String? validateCheckoutAddress(String? value) {
+  final v = value?.trim() ?? "";
+  if (v.isEmpty) return "Please enter a delivery address";
+  if (codePointLength(v) > maxAddressLength) {
+    return "Address must be $maxAddressLength characters or fewer";
+  }
+  return null;
+}
+
+// A persisted Buy Now key is reused only for the same items and quantities
+// (see buyNowKeySignature) and only within 30 minutes; anything else starts a
+// fresh attempt.
+const Duration buyNowKeyMaxAge = Duration(minutes: 30);
+
+// Items and quantities only: after a lost response the coupon may have to be
+// dropped (e.g. its usage was consumed by the order that went through), and
+// the retry must still reuse the key so the server replays that order.
+String buyNowKeySignature(List<Map<String, dynamic>> items) =>
+    items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
+
+// Items, quantities and prices: any change means an applied coupon's discount
+// must be re-validated.
+String pricedItemsSignature(List<Map<String, dynamic>> items) => items
+    .map((item) => "${item["productId"]}x${item["quantity"]}@${item["price"]}")
+    .join(",");
+
+String? pendingBuyNowKey({
+  required String signature,
+  required String? storedKey,
+  required String? storedSignature,
+  required int? storedAt,
+  required DateTime now,
+}) {
+  if (storedKey == null || storedSignature != signature || storedAt == null) {
+    return null;
+  }
+  final age = now.difference(DateTime.fromMillisecondsSinceEpoch(storedAt));
+  if (age.isNegative || age > buyNowKeyMaxAge) return null;
+  return storedKey;
+}
 
 class CheckoutScreen extends StatefulWidget {
   final String? initialCouponCode;
 
+  // Buy Now: check out exactly these items (same shape as loaded cart items)
+  // instead of the cart. The cart is left untouched.
+  final List<Map<String, dynamic>>? buyNowItems;
+
   const CheckoutScreen({
     super.key,
     this.initialCouponCode,
+    this.buyNowItems,
   });
 
   @override
@@ -36,6 +104,34 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String couponErrorMessage = "";
 
   List<Map<String, dynamic>> cartItems = [];
+  String? loadError;
+
+  // One key per checkout attempt; reused across retries / double taps so the
+  // server never creates a duplicate order. Reset when any order input changes.
+  String? idempotencyKey;
+  String idempotencySignature = "";
+
+  // Buy Now has no server cart to show a timed-out order went through, so its
+  // pending key survives leaving and re-entering checkout.
+  static const String pendingKeyPref = "buyNowPendingOrderKey";
+  static const String pendingSigPref = "buyNowPendingOrderSig";
+  static const String pendingAtPref = "buyNowPendingOrderAt";
+
+  final deliveryFormKey = GlobalKey<FormState>();
+
+  static Future<void> clearPendingBuyNow(SharedPreferences prefs) async {
+    await prefs.remove(pendingKeyPref);
+    await prefs.remove(pendingSigPref);
+    await prefs.remove(pendingAtPref);
+  }
+
+  static String generateIdempotencyKey() {
+    final random = Random.secure();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, "0"),
+    ).join();
+  }
 
   @override
   void initState() {
@@ -61,9 +157,32 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> loadCheckoutData() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
 
-    nameController.text = prefs.getString("userName") ?? "";
-    phoneController.text = prefs.getString("userPhone") ?? "";
-    addressController.text = prefs.getString("savedAddress") ?? "";
+    // Prefill only empty fields so a reload keeps the user's edits.
+    if (nameController.text.isEmpty) {
+      nameController.text = prefs.getString("userName") ?? "";
+    }
+    if (phoneController.text.isEmpty) {
+      phoneController.text = prefs.getString("userPhone") ?? "";
+    }
+    if (addressController.text.isEmpty) {
+      addressController.text = prefs.getString("savedAddress") ?? "";
+    }
+
+    if (!mounted) return;
+
+    final bool firstLoad = isLoading;
+    final String previousItems = pricedItemsSignature(cartItems);
+
+    if (widget.buyNowItems != null) {
+      final items = await refreshBuyNowPrices(widget.buyNowItems!);
+      if (!mounted) return;
+      setState(() {
+        cartItems = items;
+        isLoading = false;
+      });
+      recheckCoupon(firstLoad, previousItems);
+      return;
+    }
 
     final cartResult = await ApiService.getCart();
 
@@ -73,51 +192,76 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final dynamic rawCart = cartResult["cart"];
       final List items = (rawCart?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, dynamic> productMap = {};
-
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final map = p as Map<String, dynamic>;
-          productMap[map["id"]?.toString() ?? ""] = map;
-        }
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
       for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
+        // Backend populates items[].product; null means the product was deleted.
+        final product = item["product"];
+        if (product is! Map<String, dynamic>) continue;
+        final List images = product["images"] is List ? product["images"] as List : const [];
 
         joined.add({
-          "productId": productId,
+          "productId": item["productId"]?.toString() ?? product["id"]?.toString() ?? "",
           "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
-          "name": product?["name"]?.toString() ?? "Handcrafted Jewellery Piece",
-          "price": (product?["price"] as num?)?.toDouble() ?? 0.0,
-          "category": product?["category"]?.toString() ?? "Jewellery",
-          "image": (product?["images"] as List?) is List &&
-                  ((product?["images"] as List).isNotEmpty)
-              ? (product!["images"] as List).first.toString()
+          "name": product["name"]?.toString() ?? "",
+          "price": (product["price"] as num?)?.toDouble() ?? 0.0,
+          "category": product["category"]?.toString() ?? "Jewellery",
+          "image": images.isNotEmpty
+              ? images.first.toString()
               : "assets/images/ring.png",
         });
       }
 
       setState(() {
         cartItems = joined;
+        loadError = null;
         isLoading = false;
       });
 
-      if (widget.initialCouponCode != null &&
-          widget.initialCouponCode!.trim().isNotEmpty &&
-          joined.isNotEmpty) {
-        applyCoupon();
-      }
+      recheckCoupon(firstLoad, previousItems);
     } else {
       setState(() {
+        loadError = cartResult["message"]?.toString() ?? "Unable to load your cart";
         isLoading = false;
       });
     }
+  }
+
+  // First load applies the coupon passed in; later reloads re-validate an
+  // applied coupon whenever item prices or quantities changed.
+  void recheckCoupon(bool firstLoad, String previousItems) {
+    if (cartItems.isEmpty) return;
+    final bool initialCoupon = widget.initialCouponCode?.trim().isNotEmpty ?? false;
+    if (firstLoad
+        ? initialCoupon
+        : appliedCouponCode != null &&
+            pricedItemsSignature(cartItems) != previousItems) {
+      applyCoupon(appliedCouponCode);
+    }
+  }
+
+  // The passed Buy Now price may be stale (the product screen can sit open for
+  // a long time); show the current price. On failure keep the passed price.
+  Future<List<Map<String, dynamic>>> refreshBuyNowPrices(
+    List<Map<String, dynamic>> items,
+  ) async {
+    return Future.wait(items.map((item) async {
+      final copy = Map<String, dynamic>.from(item);
+      final result = await ApiService.getProductById(item["productId"].toString());
+      final price = result["success"] == true ? (result["product"]?["price"]) : null;
+      if (price is num) copy["price"] = price.toDouble();
+      return copy;
+    }));
+  }
+
+  String itemsSignature(List<Map<String, dynamic>> items) {
+    return items.map((item) => "${item["productId"]}x${item["quantity"]}").join(",");
+  }
+
+  List<Map<String, dynamic>> get couponItems {
+    return cartItems.map((item) {
+      return {"productId": item["productId"], "quantity": item["quantity"]};
+    }).toList();
   }
 
   int get itemCount {
@@ -145,8 +289,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   // =====================================================
   // APPLY COUPON CODE
   // =====================================================
-  Future<void> applyCoupon() async {
-    final code = couponController.text.trim().toUpperCase();
+  // [codeOverride] re-validates an already applied coupon (e.g. after a cart
+  // reload) regardless of what is in the text field.
+  Future<void> applyCoupon([String? codeOverride]) async {
+    final code = (codeOverride ?? couponController.text).trim().toUpperCase();
     if (code.isEmpty) return;
 
     HapticFeedback.selectionClick();
@@ -158,25 +304,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       couponSuccessMessage = "";
     });
 
-    String? qualifyingCategory;
-    for (final item in cartItems) {
-      final cat = item["category"]?.toString();
-      if (cat != null && cat.isNotEmpty) {
-        if (code.toLowerCase().contains(cat.toLowerCase()) ||
-            (code.contains("SOLITAIRE") && cat.toLowerCase() == "ring") ||
-            (code.contains("BRIDAL") && cat.toLowerCase() == "necklace") ||
-            (code.contains("GOLD") && cat.toLowerCase() == "chain")) {
-          qualifyingCategory = cat;
-          break;
-        }
-      }
-    }
-    qualifyingCategory ??= cartItems.isNotEmpty ? cartItems.first["category"]?.toString() : null;
-
     final result = await ApiService.validateCoupon(
       code: code,
       subtotal: subtotal,
-      category: qualifyingCategory,
+      items: couponItems,
     );
 
     if (!mounted) return;
@@ -221,6 +352,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   // PLACE ORDER
   // =====================================================
   Future<void> placeOrder() async {
+    if (isPlacingOrder) return;
+
     if (cartItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Your cart is empty")),
@@ -228,11 +361,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
 
-    if (nameController.text.trim().isEmpty ||
-        phoneController.text.trim().isEmpty ||
-        addressController.text.trim().isEmpty) {
+    if (!(deliveryFormKey.currentState?.validate() ?? false)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill in all delivery details")),
+        const SnackBar(content: Text("Please check your delivery details")),
       );
       return;
     }
@@ -241,34 +372,101 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       isPlacingOrder = true;
     });
 
-    final result = await ApiService.placeOrder(
-      customerName: nameController.text.trim(),
-      phone: phoneController.text.trim(),
-      address: addressController.text.trim(),
-      paymentMethod: paymentMethod,
-      couponCode: appliedCouponCode,
-      discountAmount: appliedDiscount,
-      items: cartItems.map((item) {
-        return {
-          "productId": item["productId"],
-          "name": item["name"],
-          "image": item["image"],
-          "price": item["price"],
-          "quantity": item["quantity"],
-        };
-      }).toList(),
-    );
+    // Captured up front: the success path below may run after this screen
+    // is gone, when the controllers are already disposed.
+    final bool isBuyNow = widget.buyNowItems != null;
+    final String name = nameController.text.trim();
+    final String phone = phoneController.text.trim();
+    final String address = addressController.text.trim();
+    final List<Map<String, dynamic>> orderItems = cartItems.map((item) {
+      return {
+        "productId": item["productId"],
+        "name": item["name"],
+        "image": item["image"],
+        "price": item["price"],
+        "quantity": item["quantity"],
+      };
+    }).toList();
+    final String keySignature = buyNowKeySignature(cartItems);
+    final String signature = [
+      itemsSignature(cartItems),
+      appliedCouponCode ?? "",
+      name,
+      phone,
+      address,
+      paymentMethod,
+    ].join("\u0001");
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    Future<void> newKey() async {
+      idempotencyKey = generateIdempotencyKey();
+      if (isBuyNow) {
+        await prefs.setString(pendingKeyPref, idempotencyKey!);
+        await prefs.setString(pendingSigPref, keySignature);
+        await prefs.setInt(pendingAtPref, DateTime.now().millisecondsSinceEpoch);
+      }
+    }
+
+    if (idempotencyKey == null || idempotencySignature != signature) {
+      final String? pendingKey = isBuyNow
+          ? pendingBuyNowKey(
+              signature: keySignature,
+              storedKey: prefs.getString(pendingKeyPref),
+              storedSignature: prefs.getString(pendingSigPref),
+              storedAt: prefs.getInt(pendingAtPref),
+              now: DateTime.now(),
+            )
+          : null;
+      if (pendingKey != null) {
+        idempotencyKey = pendingKey;
+      } else {
+        await newKey(); // overwrites any stale persisted Buy Now key
+      }
+      idempotencySignature = signature;
+    }
+
+    Future<Map<String, dynamic>> send() => ApiService.placeOrder(
+          fromCart: !isBuyNow,
+          customerName: name,
+          phone: phone,
+          address: address,
+          paymentMethod: paymentMethod,
+          couponCode: appliedCouponCode,
+          discountAmount: appliedDiscount,
+          idempotencyKey: idempotencyKey,
+          items: orderItems,
+        );
+
+    Map<String, dynamic> result = await send();
+
+    // 409 means an order already exists for this key (placed over 24h ago).
+    // Resending with a new key would duplicate it, so stop and point to Orders.
+    if (result["statusCode"] == 409 && result["idempotencyConflict"] == true) {
+      idempotencyKey = null;
+      if (isBuyNow) await clearPendingBuyNow(prefs);
+      result = {
+        ...result,
+        "message": "This order was already placed earlier. Please check My Orders before ordering again.",
+      };
+    }
+
+    if (result["success"] == true) {
+      // No context needed: runs even if the screen was popped mid-request,
+      // so a placed Buy Now order never leaves a reusable key behind.
+      idempotencyKey = null;
+      if (isBuyNow) await clearPendingBuyNow(prefs);
+      await prefs.setString("savedAddress", address);
+    }
 
     if (!mounted) return;
 
     if (result["success"] == true) {
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.setString("savedAddress", addressController.text.trim());
-      await ApiService.clearCart();
-
-      final String placedOrderId = result["order"]?["_id"]?.toString() ?? "";
-
-      if (!mounted) return;
+      // The server removes the ordered items from the cart itself.
+      final dynamic order = result["order"];
+      final String placedOrderId = order?["_id"]?.toString() ?? "";
+      final double paidDiscount = (order?["discountAmount"] as num?)?.toDouble() ?? 0.0;
+      final double? paidTotal = (order?["totalAmount"] as num?)?.toDouble();
 
       setState(() {
         isPlacingOrder = false;
@@ -291,12 +489,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                appliedDiscount > 0
-                    ? "Thank you for acquiring with ZAWER. Your ₹${appliedDiscount.toStringAsFixed(0)} privilege discount has been applied."
+                paidDiscount > 0
+                    ? "Thank you for acquiring with ZAWER. Your ₹${paidDiscount.toStringAsFixed(0)} privilege discount has been applied."
                     : "Thank you for acquiring with ZAWER. Your piece is registered under 100% insured armored transit.",
                 textAlign: TextAlign.center,
                 style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
               ),
+              if (paidTotal != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  "Total: ₹${paidTotal.toStringAsFixed(0)}",
+                  textAlign: TextAlign.center,
+                  style: AppFonts.poppins(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+              ],
             ],
           ),
           actions: [
@@ -351,8 +557,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         ),
       );
     } else {
+      // The server flags every coupon rejection from POST /api/orders.
+      final bool couponRejected = result["statusCode"] == 400 &&
+          appliedCouponCode != null &&
+          result["couponError"] == true;
+
       setState(() {
         isPlacingOrder = false;
+        if (couponRejected) {
+          appliedCouponCode = null;
+          appliedDiscount = 0.0;
+          couponController.clear();
+          couponSuccessMessage = "";
+          couponErrorMessage =
+              "${result["message"]} The coupon was removed; review your total and place the order again.";
+        }
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -373,11 +592,47 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    return Scaffold(
+    // Leaving mid-request would skip the success handling below.
+    return PopScope(
+      canPop: !isPlacingOrder,
+      child: Scaffold(
       backgroundColor: isDark ? const Color(0xFF0C0C0E) : const Color(0xFFFAF8F5),
       appBar: buildMaisonAppBar(isDark),
       body: isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.gold))
+          : loadError != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off_rounded, color: AppColors.gold, size: 48),
+                    const SizedBox(height: 12),
+                    Text(
+                      loadError!,
+                      textAlign: TextAlign.center,
+                      style: AppFonts.poppins(fontSize: 13, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          isLoading = true;
+                          loadError = null;
+                        });
+                        loadCheckoutData();
+                      },
+                      child: const Text("RETRY"),
+                    ),
+                  ],
+                ),
+              ),
+            )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -413,6 +668,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 
@@ -426,11 +682,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               padding: const EdgeInsets.all(8.0),
               child: InkWell(
                 borderRadius: BorderRadius.circular(16),
-                onTap: () {
-                  if (Navigator.canPop(context)) {
-                    Navigator.pop(context);
-                  }
-                },
+                onTap: () => Navigator.maybePop(context),
                 child: Container(
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
@@ -492,10 +744,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
         ),
       ),
-      child: Column(
+      child: Form(
+        key: deliveryFormKey,
+        child: Column(
         children: [
-          TextField(
+          TextFormField(
             controller: nameController,
+            maxLength: maxNameLength,
+            validator: validateCheckoutName,
             style: AppFonts.poppins(fontSize: 13.5),
             decoration: InputDecoration(
               labelText: "Recipient Full Name",
@@ -504,9 +760,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          TextField(
+          TextFormField(
             controller: phoneController,
             keyboardType: TextInputType.phone,
+            maxLength: maxPhoneLength,
+            validator: validateCheckoutPhone,
             style: AppFonts.poppins(fontSize: 13.5),
             decoration: InputDecoration(
               labelText: "Verified Phone Number",
@@ -515,9 +773,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          TextField(
+          TextFormField(
             controller: addressController,
             maxLines: 2,
+            maxLength: maxAddressLength,
+            validator: validateCheckoutAddress,
             style: AppFonts.poppins(fontSize: 13.5),
             decoration: InputDecoration(
               labelText: "Vault Delivery Destination",
@@ -526,6 +786,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -551,6 +812,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               Expanded(
                 child: TextField(
                   controller: couponController,
+                  readOnly: appliedCouponCode != null,
                   textCapitalization: TextCapitalization.characters,
                   style: AppFonts.poppins(fontSize: 13.5, fontWeight: FontWeight.bold),
                   decoration: InputDecoration(
@@ -591,7 +853,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     minimumSize: const Size(80, 48),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  onPressed: removeCoupon,
+                  onPressed: isValidatingCoupon ? null : removeCoupon,
                   child: const Text("REMOVE"),
                 ),
             ],
@@ -632,11 +894,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ],
           const SizedBox(height: 10),
           InkWell(
-            onTap: () {
-              Navigator.push(
+            onTap: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const OffersScreen()),
               );
+              // The cart may have changed on pushed screens; reload it.
+              if (mounted) loadCheckoutData();
             },
             child: Row(
               children: [
@@ -836,7 +1100,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
-        onPressed: isPlacingOrder ? null : placeOrder,
+        onPressed: isPlacingOrder || isValidatingCoupon ? null : placeOrder,
         child: isPlacingOrder
             ? const SizedBox(
                 width: 22,

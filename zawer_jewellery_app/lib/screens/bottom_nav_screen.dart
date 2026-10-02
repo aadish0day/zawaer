@@ -20,21 +20,27 @@ class _BottomNavScreenState
 
   int currentIndex = 0;
 
+  final GlobalKey<HomeScreenState> homeKey =
+  GlobalKey();
+
   final GlobalKey<WishlistScreenState>
   wishlistKey = GlobalKey();
 
   final GlobalKey<CartScreenState> cartKey =
   GlobalKey();
 
+  final GlobalKey<ProfileScreenState> profileKey =
+  GlobalKey();
+
   late final List<Widget> screens = [
 
-    const HomeScreen(),
+    HomeScreen(key: homeKey),
 
     WishlistScreen(key: wishlistKey),
 
     CartScreen(key: cartKey),
 
-    const ProfileScreen(),
+    ProfileScreen(key: profileKey),
 
   ];
 
@@ -46,6 +52,7 @@ class _BottomNavScreenState
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         if (currentIndex != 0) {
+          homeKey.currentState?.loadWishlistState();
           setState(() {
             currentIndex = 0;
           });
@@ -74,6 +81,10 @@ class _BottomNavScreenState
 
         onTap: (index){
 
+          if (index == 0) {
+            homeKey.currentState?.loadWishlistState();
+          }
+
           if (index == 1) {
             wishlistKey.currentState
                 ?.loadWishlist();
@@ -81,6 +92,10 @@ class _BottomNavScreenState
 
           if (index == 2) {
             cartKey.currentState?.loadCart();
+          }
+
+          if (index == 3) {
+            profileKey.currentState?.reload();
           }
 
           setState(() {

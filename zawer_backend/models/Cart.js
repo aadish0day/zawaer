@@ -49,11 +49,4 @@ const cartSchema = new mongoose.Schema(
   }
 );
 
-cartSchema.virtual("product", {
-  ref: "Product",
-  localField: "productId",
-  foreignField: "id",
-  justOne: true,
-});
-
 module.exports = mongoose.model("Cart", cartSchema);

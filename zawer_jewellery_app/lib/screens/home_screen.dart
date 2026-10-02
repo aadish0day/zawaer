@@ -14,14 +14,15 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
   String selectedCategory = "All";
   bool isLoadingProducts = true;
   List<Product> apiProducts = [];
   Set<String> wishlistedIds = {};
+  final Set<String> _togglingWishlistIds = {};
   final TextEditingController searchController = TextEditingController();
   final PageController _heroPageController = PageController();
   int _currentHeroPage = 0;
@@ -89,33 +90,77 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Bumped per request; a response whose number is no longer current is
+  // stale (a newer refresh started) and is dropped.
+  int _productsRequestSeq = 0;
+  int _wishlistRequestSeq = 0;
+
   Future<void> loadProducts() async {
+    // Can be called from a SnackBar's Retry after this screen is gone
+    if (!mounted) return;
+    final int seq = ++_productsRequestSeq;
     setState(() {
       isLoadingProducts = true;
     });
 
-    final result = await ApiService.getProducts();
+    // The API is paginated: walk every page (capped so a bad `pages` value
+    // can't loop forever). Keyed by id so an item shifting between pages
+    // mid-walk isn't shown twice.
+    final Map<String, Product> byId = {};
+    Map<String, dynamic> result = const {};
+    for (int page = 1; page <= 20; page++) {
+      result = await ApiService.getProducts(page: page, limit: 100);
+      if (seq != _productsRequestSeq) return;
+      if (result["success"] != true) break;
+      for (final p in (result["products"] ?? []) as List) {
+        final product = Product.fromJson(p as Map<String, dynamic>);
+        byId.putIfAbsent(product.id, () => product);
+      }
+      final int pages = (result["pages"] as num?)?.toInt() ?? page;
+      if (page >= pages) break;
+    }
 
-    if (!mounted) return;
+    if (!mounted || seq != _productsRequestSeq) return;
 
-    if (result["success"] == true) {
-      final List productList = (result["products"] ?? []) as List;
-      setState(() {
-        apiProducts = productList
-            .map((p) => Product.fromJson(p as Map<String, dynamic>))
-            .toList();
-        isLoadingProducts = false;
-      });
-    } else {
-      setState(() {
-        isLoadingProducts = false;
-      });
+    final bool failed = result["success"] != true;
+    setState(() {
+      // On failure keep whatever we have rather than blanking the catalog.
+      if (!failed || byId.isNotEmpty) apiProducts = byId.values.toList();
+      isLoadingProducts = false;
+    });
+
+    if (failed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 6),
+          content: Text(
+            byId.isEmpty
+                ? (result["message"]?.toString() ?? "Could not load the collection")
+                : "Some products could not be loaded. The collection may be incomplete.",
+            style: AppFonts.poppins(fontSize: 12.5, color: Colors.white),
+          ),
+          action: SnackBarAction(
+            label: "RETRY",
+            textColor: Colors.white,
+            onPressed: loadProducts,
+          ),
+        ),
+      );
     }
   }
 
   Future<void> loadWishlistState() async {
+    final int seq = ++_wishlistRequestSeq;
     final result = await ApiService.getWishlist();
-    if (!mounted || result["success"] != true) return;
+    if (!mounted || seq != _wishlistRequestSeq) return;
+    if (result["statusCode"] == 401) {
+      // Signed out: clear stale hearts.
+      setState(() => wishlistedIds = {});
+      return;
+    }
+    if (result["success"] != true) return;
 
     final dynamic rawWish = result["wishlist"];
     final List items = (rawWish?["items"] ?? []) as List;
@@ -146,8 +191,11 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (!_togglingWishlistIds.add(product.id)) return;
     HapticFeedback.lightImpact();
     final isWishlisted = wishlistedIds.contains(product.id);
+    // Invalidate any in-flight wishlist GET so it cannot overwrite this tap.
+    _wishlistRequestSeq++;
 
     setState(() {
       if (isWishlisted) {
@@ -157,9 +205,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    final res = isWishlisted
-        ? await ApiService.removeFromWishlist(product.id)
-        : await ApiService.addToWishlist(product.id);
+    final Map<String, dynamic> res;
+    try {
+      res = isWishlisted
+          ? await ApiService.removeFromWishlist(product.id)
+          : await ApiService.addToWishlist(product.id);
+    } finally {
+      _togglingWishlistIds.remove(product.id);
+    }
 
     if (res["success"] != true) {
       if (!mounted) return;

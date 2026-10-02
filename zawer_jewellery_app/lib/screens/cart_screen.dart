@@ -32,7 +32,21 @@ class CartScreenState extends State<CartScreen> {
   // =====================================================
   // LOAD CART FROM BACKEND (MongoDB)
   // =====================================================
+  // Bumped when a load starts and when a cart mutation completes; a load only
+  // applies its result if its token is still current, so a slow or
+  // pre-mutation GET can't overwrite newer state.
+  int _loadToken = 0;
+
+  void _mutationCompleted() {
+    _loadToken++;
+    // A load in flight is now stale; replace it so the spinner can't stick.
+    if (mounted && isLoading) loadCart();
+  }
+
   Future<void> loadCart() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
+    final int token = ++_loadToken;
     setState(() {
       isLoading = true;
       errorMessage = "";
@@ -41,7 +55,7 @@ class CartScreenState extends State<CartScreen> {
     try {
       final cartResult = await ApiService.getCart();
 
-      if (!mounted) return;
+      if (!mounted || token != _loadToken) return;
 
       if (cartResult["statusCode"] == 401) {
         setState(() {
@@ -63,35 +77,34 @@ class CartScreenState extends State<CartScreen> {
       final dynamic rawCart = cartResult["cart"];
       final List items = (rawCart?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, Product> productMap = {};
-
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final product = Product.fromJson(p as Map<String, dynamic>);
-          productMap[product.id] = product;
-        }
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
-      for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
+      // A quantity sync still pending for an item is newer than what the
+      // server just returned; keep the local value for those.
+      final Map<String, int> pendingQty = {
+        for (final item in cartItems)
+          if (_qtySyncs.containsKey(item["productId"].toString()))
+            item["productId"].toString(): (item["quantity"] as num).toInt(),
+      };
 
+      for (final item in items) {
+        // Backend populates items[].product; null means the product was deleted.
+        final rawProduct = item["product"];
+        if (rawProduct is! Map<String, dynamic>) continue;
+        final product = Product.fromJson(rawProduct);
+
+        final String productId = item["productId"]?.toString() ?? product.id;
+        if (_pendingRemovals.contains(productId)) continue;
         joined.add({
           "productId": productId,
-          "quantity": (item["quantity"] as num?)?.toInt() ?? 1,
-          "name": product?.name ?? "Handcrafted Jewellery Piece",
-          "category": product?.category ?? "Jewellery",
-          "description": product?.description ?? "",
-          "price": product?.price ?? 0.0,
-          "rating": product?.rating ?? 4.8,
-          "image": (product?.images.isNotEmpty ?? false)
-              ? product!.images.first
+          "quantity": pendingQty[productId] ?? (item["quantity"] as num?)?.toInt() ?? 1,
+          "name": product.name,
+          "category": product.category,
+          "price": product.price,
+          "image": product.images.isNotEmpty
+              ? product.images.first
               : "assets/images/ring.png",
-          "allImages": product?.images ?? [],
+          "product": product,
         });
       }
 
@@ -103,7 +116,7 @@ class CartScreenState extends State<CartScreen> {
         isLoading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || token != _loadToken) return;
       setState(() {
         isLoading = false;
         errorMessage = "Unable to connect to Maison Vault server";
@@ -114,35 +127,116 @@ class CartScreenState extends State<CartScreen> {
   // =====================================================
   // UPDATE QUANTITY
   // =====================================================
-  Future<void> changeQuantity(int index, int newQuantity) async {
-    if (newQuantity < 1) return;
+  // Latest desired quantity per productId, and the running sync loop per item.
+  // Rapid taps only update the desired value; one PUT runs at a time per item
+  // and always sends the newest value, so responses can't land out of order.
+  // Loops keep running after dispose so pending quantities are never dropped.
+  final Map<String, int> _desiredQty = {};
+  final Map<String, Future<void>> _qtySyncs = {};
+  final Set<String> _pendingRemovals = {};
+  bool isWaitingForSync = false;
+  bool _checkoutInFlight = false;
+
+  void changeQuantity(int index, int newQuantity) {
+    if (newQuantity < 1 || newQuantity > 10) return;
     HapticFeedback.selectionClick();
 
-    final item = cartItems[index];
+    final productId = cartItems[index]["productId"].toString();
 
     setState(() {
       cartItems[index]["quantity"] = newQuantity;
     });
 
-    final result = await ApiService.updateCartQuantity(
-      productId: item["productId"].toString(),
-      quantity: newQuantity,
-    );
+    _desiredQty[productId] = newQuantity;
+    _qtySyncs[productId] ??= _syncQuantity(productId);
+  }
 
-    if (!mounted) return;
+  Future<void> _syncQuantity(String productId) async {
+    String? failure;
+    try {
+      while (_desiredQty.containsKey(productId)) {
+        final quantity = _desiredQty.remove(productId)!;
+        final result = await ApiService.updateCartQuantity(
+          productId: productId,
+          quantity: quantity,
+        );
+        _mutationCompleted();
 
-    if (result["success"] != true) {
+        if (result["success"] != true) {
+          _desiredQty.remove(productId);
+          failure = result["message"]?.toString() ?? "Could not update quantity";
+          break;
+        }
+
+        // Reconcile with the server-confirmed value unless a newer tap is queued.
+        if (mounted && !_desiredQty.containsKey(productId)) {
+          final List serverItems = (result["cart"]?["items"] ?? const []) as List;
+          final confirmed = serverItems.firstWhere(
+            (i) => i["productId"]?.toString() == productId,
+            orElse: () => null,
+          );
+          final int confirmedQty = (confirmed?["quantity"] as num?)?.toInt() ?? quantity;
+          setState(() {
+            for (final item in cartItems) {
+              if (item["productId"].toString() == productId) item["quantity"] = confirmedQty;
+            }
+          });
+        }
+      }
+    } finally {
+      _qtySyncs.remove(productId);
+    }
+
+    // An item removed meanwhile (e.g. a 404 after its DELETE) needs no error.
+    final bool removed = _pendingRemovals.contains(productId) ||
+        !cartItems.any((i) => i["productId"].toString() == productId);
+    if (failure != null && mounted && !removed) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.red.shade900,
-          content: Text(
-            result["message"]?.toString() ?? "Could not update quantity",
-            style: AppFonts.poppins(color: Colors.white),
-          ),
+          content: Text(failure, style: AppFonts.poppins(color: Colors.white)),
         ),
       );
       loadCart();
+    }
+  }
+
+  Future<void> proceedToCheckout() async {
+    // Ignore further taps until the checkout route returns.
+    if (_checkoutInFlight) return;
+    _checkoutInFlight = true;
+    try {
+      HapticFeedback.mediumImpact();
+
+      if (_qtySyncs.isNotEmpty) {
+        setState(() => isWaitingForSync = true);
+        try {
+          while (_qtySyncs.isNotEmpty) {
+            await Future.wait(_qtySyncs.values.toList());
+          }
+        } catch (_) {
+          // Checkout reloads the cart from the server, so it shows the truth.
+        } finally {
+          if (mounted) setState(() => isWaitingForSync = false);
+        }
+      }
+      // Removals aren't tracked as futures; wait (bounded by the request timeout)
+      // so checkout's cart GET can't run before a DELETE lands.
+      while (_pendingRemovals.isNotEmpty && mounted) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
+        ),
+      );
+      loadCart();
+    } finally {
+      _checkoutInFlight = false;
     }
   }
 
@@ -152,14 +246,28 @@ class CartScreenState extends State<CartScreen> {
   Future<void> removeItem(int index) async {
     HapticFeedback.lightImpact();
     final item = cartItems[index];
+    final String productId = item["productId"].toString();
+    _desiredQty.remove(productId);
+    _pendingRemovals.add(productId);
 
     setState(() {
       cartItems.removeAt(index);
     });
 
-    final result = await ApiService.removeFromCart(
-      item["productId"].toString(),
-    );
+    final Map<String, dynamic> result;
+    try {
+      // Let an in-flight PUT finish first so it can't land after the DELETE.
+      final pendingSync = _qtySyncs[productId];
+      if (pendingSync != null) {
+        try {
+          await pendingSync;
+        } catch (_) {}
+      }
+      result = await ApiService.removeFromCart(productId);
+    } finally {
+      _pendingRemovals.remove(productId);
+    }
+    _mutationCompleted();
 
     if (!mounted) return;
 
@@ -360,17 +468,7 @@ class CartScreenState extends State<CartScreen> {
   // =========================================================================
   Widget buildLuxuryCartItem(int index, bool isDark) {
     final item = cartItems[index];
-    final imagesList = (item["allImages"] as List?)?.map((e) => e.toString()).toList() ?? [item["image"].toString()];
-
-    final productObj = Product(
-      id: item["productId"].toString(),
-      name: item["name"].toString(),
-      category: item["category"].toString(),
-      description: item["description"]?.toString() ?? "",
-      price: (item["price"] as num?)?.toDouble() ?? 0.0,
-      rating: (item["rating"] as num?)?.toDouble() ?? 4.8,
-      images: imagesList,
-    );
+    final productObj = item["product"] as Product;
 
     final quantity = (item["quantity"] as num?)?.toInt() ?? 1;
     final itemPrice = (item["price"] as num?)?.toDouble() ?? 0.0;
@@ -537,7 +635,9 @@ class CartScreenState extends State<CartScreen> {
                           children: [
                             InkWell(
                               borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
-                              onTap: () => changeQuantity(index, quantity - 1),
+                              onTap: () => quantity == 1
+                                  ? removeItem(index)
+                                  : changeQuantity(index, quantity - 1),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                 child: Icon(
@@ -727,17 +827,14 @@ class CartScreenState extends State<CartScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                 ),
-                onPressed: () async {
-                  HapticFeedback.mediumImpact();
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CheckoutScreen(initialCouponCode: widget.couponCode),
-                    ),
-                  );
-                  loadCart();
-                },
-                child: Row(
+                onPressed: isWaitingForSync ? null : proceedToCheckout,
+                child: isWaitingForSync
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const SizedBox(width: 24),

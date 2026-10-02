@@ -10,6 +10,14 @@ const {
   findOrderFlexible,
 } = require("./controllers/orderController");
 
+// This suite creates and deletes orders: never run it against a remote DB.
+if (process.env.MONGO_URI && !/127\.0\.0\.1|localhost/.test(process.env.MONGO_URI)) {
+  console.error("Refusing to run: MONGO_URI must point at a local MongoDB (127.0.0.1 / localhost).");
+  process.exit(1);
+}
+
+const ADMIN_USER = { id: "admin_test_1", email: "admin@test.local", role: "admin" };
+
 async function runTests() {
   console.log("=================================================");
   console.log("🚀 STARTING ORDER TRACKING CORE & LOGIC TESTS");
@@ -93,7 +101,7 @@ async function runTests() {
       paymentMethod: "UPI",
       items: [
         {
-          productId: "prod_necklace_01",
+          productId: "2", // seeded "Luxury Necklace" (prices come from the DB)
           name: "24K Royal Polki Necklace",
           image: "assets/images/necklace1.jpg",
           price: 320000,
@@ -150,6 +158,7 @@ async function runTests() {
     for (let i = 1; i < STAGES.length; i++) {
       const nextStage = STAGES[i];
       const reqUpdate = {
+        user: ADMIN_USER,
         params: { id: order._id.toString() },
         body: { status: nextStage },
       };
@@ -243,6 +252,7 @@ async function runTests() {
 
     // Invalid Status
     const reqInvalidStatus = {
+      user: ADMIN_USER,
       params: { id: order._id.toString() },
       body: { status: "Flying in the sky" },
     };

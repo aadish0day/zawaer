@@ -41,11 +41,4 @@ const wishlistSchema = new mongoose.Schema(
   }
 );
 
-wishlistSchema.virtual("product", {
-  ref: "Product",
-  localField: "productId",
-  foreignField: "id",
-  justOne: true,
-});
-
 module.exports = mongoose.model("Wishlist", wishlistSchema);

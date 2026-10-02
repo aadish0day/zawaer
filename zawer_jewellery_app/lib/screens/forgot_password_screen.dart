@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../utils/text_styles.dart';
 
 import '../services/api_service.dart';
 
 import '../utils/colors.dart';
+import '../utils/validators.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -50,7 +52,9 @@ class _ForgotPasswordScreenState
 
   Future<void> sendOTP() async {
 
-    if (!formKey.currentState!.validate()) {
+    // On resend the email was already validated; the empty OTP/password
+    // fields must not block it.
+    if (!otpSent && !formKey.currentState!.validate()) {
       return;
     }
 
@@ -359,13 +363,13 @@ class _ForgotPasswordScreenState
                           validator: (value) {
 
                             if(value==null||
-                                value.isEmpty){
+                                value.trim().isEmpty){
 
                               return "Enter Email";
 
                             }
 
-                            if(!value.contains("@")){
+                            if(!isValidEmail(value)){
 
                               return "Enter Valid Email";
 
@@ -413,6 +417,10 @@ class _ForgotPasswordScreenState
 
                           maxLength: 6,
 
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+
                           decoration:
                           const InputDecoration(
 
@@ -436,7 +444,7 @@ class _ForgotPasswordScreenState
 
                             }
 
-                            if (value.length != 6) {
+                            if (!RegExp(r'^\d{6}$').hasMatch(value)) {
 
                               return "OTP must be 6 digits";
 
@@ -448,13 +456,49 @@ class _ForgotPasswordScreenState
 
                         ),
 
-                        const SizedBox(height:18),
+                        Row(
+
+                          mainAxisAlignment:
+                          MainAxisAlignment.spaceBetween,
+
+                          children: [
+
+                            TextButton(
+
+                              onPressed: isLoading
+                                  ? null
+                                  : () {
+                                setState(() {
+                                  otpSent = false;
+                                  otpController.clear();
+                                });
+                              },
+
+                              child: const Text("Change email"),
+
+                            ),
+
+                            TextButton(
+
+                              onPressed: isLoading ? null : sendOTP,
+
+                              child: const Text("Resend code"),
+
+                            ),
+
+                          ],
+
+                        ),
+
+                        const SizedBox(height:8),
 
                         TextFormField(
 
                           controller: passwordController,
 
                           obscureText: true,
+
+                          maxLength: maxPasswordLength,
 
                           decoration:
                           const InputDecoration(
@@ -467,24 +511,7 @@ class _ForgotPasswordScreenState
 
                           ),
 
-                          validator: (value) {
-
-                            if (value == null ||
-                                value.isEmpty) {
-
-                              return "Enter New Password";
-
-                            }
-
-                            if (value.length < 6) {
-
-                              return "Minimum 6 characters";
-
-                            }
-
-                            return null;
-
-                          },
+                          validator: validateNewPassword,
 
                         ),
 

@@ -8,6 +8,19 @@ const PORT = process.env.PORT || 5000;
 
 let server;
 
+const JWT_SECRET = process.env.JWT_SECRET || "";
+
+if (
+  JWT_SECRET.length < 32 ||
+  JWT_SECRET === "zawer_secret_key_change_in_production"
+) {
+  console.error(
+    "JWT_SECRET is missing, too short (min 32 chars) or the public example value. " +
+      "Generate one with: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\""
+  );
+  process.exit(1);
+}
+
 const startServer = async () => {
   try {
     await connectDB();

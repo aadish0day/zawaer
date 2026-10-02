@@ -4,6 +4,8 @@ import '../utils/text_styles.dart';
 import '../models/product_model.dart';
 import '../services/api_service.dart';
 import '../utils/colors.dart';
+import '../utils/validators.dart';
+import 'checkout_screen.dart';
 import 'login_screen.dart';
 
 class ProductDetailsScreen extends StatefulWidget {
@@ -28,6 +30,8 @@ bool isFavourite = false;
 
 bool isAddingToCart = false;
 
+bool isBuyingNow = false;
+
 int currentImage = 0;
 
 List<Map<String, dynamic>> reviews = [];
@@ -38,13 +42,23 @@ int totalReviews = 0;
 
 bool isLoadingReviews = true;
 
-bool isSubmittingReview = false;
+// A notifier, not a plain field: the review dialog listens to it, so a
+// reopened dialog shows the real in-flight state and rebuilds when it ends.
+final ValueNotifier<bool> isSubmittingReview = ValueNotifier(false);
+
+static const int maxReviewLength = 1000;
 
 @override
 void initState() {
   super.initState();
   fetchReviews();
   checkWishlistStatus();
+}
+
+@override
+void dispose() {
+  isSubmittingReview.dispose();
+  super.dispose();
 }
 
 Future<void> checkWishlistStatus() async {
@@ -156,13 +170,12 @@ Future<void> fetchReviews() async {
 // SUBMIT REVIEW
 // =====================================================
 
-Future<void> submitReview({
+// Returns null on success, else the error to show in the review dialog.
+Future<String?> submitReview({
   required int rating,
   required String comment,
 }) async {
-  setState(() {
-    isSubmittingReview = true;
-  });
+  isSubmittingReview.value = true;
 
   final result = await ApiService.addProductReview(
     productId: widget.product.id,
@@ -170,31 +183,22 @@ Future<void> submitReview({
     comment: comment,
   );
 
-  if (!mounted) return;
+  if (!mounted) return null;
 
-  setState(() {
-    isSubmittingReview = false;
-  });
+  isSubmittingReview.value = false;
 
-  if (result["success"] == true) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Review submitted successfully"),
-        backgroundColor: Colors.green,
-      ),
-    );
-    fetchReviews();
-  } else {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          result["message"]?.toString() ??
-              "Could not submit review",
-        ),
-        backgroundColor: Colors.red,
-      ),
-    );
+  if (result["success"] != true) {
+    return result["message"]?.toString() ?? "Could not submit review";
   }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text("Review submitted successfully"),
+      backgroundColor: Colors.green,
+    ),
+  );
+  fetchReviews();
+  return null;
 }
 
 // =====================================================
@@ -203,6 +207,7 @@ Future<void> submitReview({
 
 void showReviewDialog() {
   int selectedRating = 0;
+  String? reviewError;
   final commentController = TextEditingController();
 
   showDialog(
@@ -254,8 +259,11 @@ void showReviewDialog() {
                   controller: commentController,
                   maxLines: 4,
                   minLines: 3,
+                  maxLength: maxReviewLength,
                   decoration: InputDecoration(
                     hintText: "Write your review...",
+                    errorText: reviewError,
+                    errorMaxLines: 3,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(15),
                     ),
@@ -272,31 +280,41 @@ void showReviewDialog() {
                 },
                 child: const Text("Cancel"),
               ),
-              ElevatedButton(
+              ValueListenableBuilder<bool>(
+                valueListenable: isSubmittingReview,
+                builder: (context, submitting, _) => ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                 ),
-                onPressed: isSubmittingReview || selectedRating == 0
+                onPressed: submitting || selectedRating == 0
                     ? null
                     : () async {
-                        Navigator.pop(dialogContext);
-                        if (commentController.text.trim().isNotEmpty) {
-                          await submitReview(
-                            rating: selectedRating,
-                            comment: commentController.text.trim(),
-                          );
+                        final comment = commentController.text.trim();
+                        if (comment.isEmpty) {
+                          setDialogState(() => reviewError = "Please write a review");
+                          return;
+                        }
+                        if (codePointLength(comment) > maxReviewLength) {
+                          setDialogState(() => reviewError =
+                              "Review must be $maxReviewLength characters or fewer");
+                          return;
+                        }
+                        // The dialog stays open (text kept) until the server
+                        // accepts the review.
+                        final pending = submitReview(
+                          rating: selectedRating,
+                          comment: comment,
+                        );
+                        setDialogState(() => reviewError = null);
+                        final error = await pending;
+                        if (!dialogContext.mounted) return;
+                        if (error == null) {
+                          Navigator.pop(dialogContext);
                         } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                "Please write a review",
-                              ),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
+                          setDialogState(() => reviewError = error);
                         }
                       },
-                child: isSubmittingReview
+                child: submitting
                     ? const SizedBox(
                         width: 20,
                         height: 20,
@@ -309,6 +327,7 @@ void showReviewDialog() {
                         "Submit",
                         style: TextStyle(color: Colors.white),
                       ),
+                ),
               ),
             ],
           );
@@ -324,8 +343,21 @@ void showReviewDialog() {
 // Wishlist Toggle
 //==========================
 
+bool isTogglingFavourite = false;
+
 Future<void> toggleFavourite() async {
+if (isTogglingFavourite) return;
+isTogglingFavourite = true;
+try {
+  await _toggleFavourite();
+} finally {
+  isTogglingFavourite = false;
+}
+}
+
+Future<void> _toggleFavourite() async {
 final token = await ApiService.getToken();
+if (!mounted) return;
 if (token.isEmpty) {
   showLoginPromptDialog("save items to your wishlist");
   return;
@@ -362,6 +394,7 @@ result["message"]?.toString() ??
 
 Future<bool> addProductToCart() async {
 final token = await ApiService.getToken();
+if (!mounted) return false;
 if (token.isEmpty) {
   showLoginPromptDialog("add items to your cart");
   return false;
@@ -598,7 +631,7 @@ size: 20,
 const SizedBox(width: 5),
 
 Text(
-product.rating.toString(),
+(totalReviews > 0 ? averageRating : product.rating).toStringAsFixed(1),
 style: AppFonts.poppins(
 fontWeight: FontWeight.w600,
 fontSize: 16,
@@ -608,7 +641,11 @@ fontSize: 16,
 const SizedBox(width: 8),
 
 Text(
-"(250+ Reviews)",
+isLoadingReviews
+? ""
+: totalReviews > 0
+? "($totalReviews ${totalReviews == 1 ? "Review" : "Reviews"})"
+: "(No reviews yet)",
 style: AppFonts.poppins(
 color: Theme.of(context).colorScheme.onSurfaceVariant,
 ),
@@ -624,7 +661,7 @@ const SizedBox(height: 20),
 //==========================
 
 Text(
-"â‚¹${product.price.toStringAsFixed(0)}",
+"₹${product.price.toStringAsFixed(0)}",
 style: AppFonts.poppins(
 fontSize: 30,
 fontWeight: FontWeight.bold,
@@ -705,6 +742,7 @@ fontWeight: FontWeight.bold,
 
 IconButton(
 onPressed: () {
+if (quantity >= 10) return;
 setState(() {
 quantity++;
 });
@@ -869,24 +907,39 @@ height: 55,
 
 child: OutlinedButton.icon(
 
-onPressed: () async {
+onPressed: isBuyingNow ? null : () async {
 final navigator = Navigator.of(context);
+setState(() => isBuyingNow = true);
 final token = await ApiService.getToken();
 if (!mounted) return;
 if (token.isEmpty) {
+  setState(() => isBuyingNow = false);
   showLoginPromptDialog("proceed to checkout");
   return;
 }
 
-final added = await addProductToCart();
-
-if (!mounted) return;
-
-if (added) {
-navigator.pushNamed(
-"/checkout",
+// Check out only this piece at the selected qty; the cart is left untouched.
+final product = widget.product;
+await navigator.push(
+MaterialPageRoute(
+builder: (_) => CheckoutScreen(
+buyNowItems: [
+{
+"productId": product.id,
+"quantity": quantity,
+"name": product.name,
+"price": product.price,
+"category": product.category,
+"image": product.images.isNotEmpty
+    ? product.images.first
+    : "assets/images/ring.png",
+},
+],
+),
+),
 );
-}
+
+if (mounted) setState(() => isBuyingNow = false);
 
 },
 
@@ -1342,7 +1395,7 @@ Widget _buildReviewItem(Map<String, dynamic> review) {
 
 String _formatDate(String dateString) {
   try {
-    final date = DateTime.parse(dateString);
+    final date = DateTime.parse(dateString).toLocal();
     final now = DateTime.now();
     final difference = now.difference(date);
 

@@ -18,6 +18,8 @@ class WishlistScreen extends StatefulWidget {
 class WishlistScreenState extends State<WishlistScreen> {
   bool isLoading = true;
   bool isGuest = false;
+  // Non-empty when the last load failed (other than 401).
+  String errorMessage = "";
   List<Map<String, dynamic>> wishlist = [];
   bool isMovingAll = false;
 
@@ -31,6 +33,8 @@ class WishlistScreenState extends State<WishlistScreen> {
   // LOAD WISHLIST FROM BACKEND (MongoDB)
   // =====================================================
   Future<void> loadWishlist() async {
+    // Called from route-pop callbacks, which may fire after dispose.
+    if (!mounted) return;
     setState(() {
       isLoading = true;
     });
@@ -44,6 +48,7 @@ class WishlistScreenState extends State<WishlistScreen> {
         setState(() {
           isGuest = true;
           isLoading = false;
+          errorMessage = "";
           wishlist = [];
         });
         return;
@@ -52,7 +57,7 @@ class WishlistScreenState extends State<WishlistScreen> {
       if (wishResult["success"] != true) {
         setState(() {
           isLoading = false;
-          wishlist = [];
+          errorMessage = wishResult["message"]?.toString() ?? "Failed to load wishlist";
         });
         return;
       }
@@ -60,34 +65,21 @@ class WishlistScreenState extends State<WishlistScreen> {
       final dynamic rawWish = wishResult["wishlist"];
       final List items = (rawWish?["items"] ?? []) as List;
 
-      final productResult = await ApiService.getProducts();
-      final Map<String, Product> productMap = {};
-
-      if (productResult["success"] == true) {
-        final List productList = (productResult["products"] ?? []) as List;
-        for (final p in productList) {
-          final product = Product.fromJson(p as Map<String, dynamic>);
-          productMap[product.id] = product;
-        }
-      }
-
       final List<Map<String, dynamic>> joined = [];
 
       for (final item in items) {
-        final productId = item["productId"]?.toString() ?? "";
-        final product = productMap[productId];
-
-        if (product == null) continue;
+        // Backend populates items[].product; null means the product was deleted.
+        final rawProduct = item["product"];
+        if (rawProduct is! Map<String, dynamic>) continue;
+        final product = Product.fromJson(rawProduct);
 
         joined.add({
-          "productId": productId,
+          "productId": item["productId"]?.toString() ?? product.id,
           "name": product.name,
           "price": product.price,
           "category": product.category,
-          "description": product.description,
-          "rating": product.rating,
           "image": product.images.isNotEmpty ? product.images.first : "assets/images/ring.png",
-          "allImages": product.images,
+          "product": product,
         });
       }
 
@@ -96,13 +88,14 @@ class WishlistScreenState extends State<WishlistScreen> {
       setState(() {
         wishlist = joined;
         isGuest = false;
+        errorMessage = "";
         isLoading = false;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         isLoading = false;
-        wishlist = [];
+        errorMessage = "Failed to load wishlist";
       });
     }
   }
@@ -143,9 +136,22 @@ class WishlistScreenState extends State<WishlistScreen> {
   // =====================================================
   // MOVE SINGLE ITEM TO BAG
   // =====================================================
+  // Product ids with a "move to bag" in flight; blocks double taps.
+  final Set<String> movingIds = {};
+
   Future<void> moveToCart(int index) async {
-    HapticFeedback.mediumImpact();
     final item = wishlist[index];
+    final productId = item["productId"].toString();
+    if (isMovingAll || !movingIds.add(productId)) return;
+    try {
+      await _moveToCart(item);
+    } finally {
+      movingIds.remove(productId);
+    }
+  }
+
+  Future<void> _moveToCart(Map<String, dynamic> item) async {
+    HapticFeedback.mediumImpact();
     final messenger = ScaffoldMessenger.of(context);
 
     messenger.showSnackBar(
@@ -191,6 +197,7 @@ class WishlistScreenState extends State<WishlistScreen> {
             label: "VIEW BAG",
             textColor: AppColors.gold,
             onPressed: () {
+              if (!mounted) return;
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const CartScreen()),
@@ -242,7 +249,10 @@ class WishlistScreenState extends State<WishlistScreen> {
     final messenger = ScaffoldMessenger.of(context);
 
     int successCount = 0;
-    final itemsToMove = List<Map<String, dynamic>>.from(wishlist);
+    // Skip items whose single "move to bag" is already in flight.
+    final itemsToMove = wishlist
+        .where((item) => !movingIds.contains(item["productId"].toString()))
+        .toList();
     for (final item in itemsToMove) {
       final productId = item["productId"].toString();
       final res = await ApiService.addToCart(
@@ -273,6 +283,7 @@ class WishlistScreenState extends State<WishlistScreen> {
           label: "GO TO BAG",
           textColor: AppColors.gold,
           onPressed: () {
+            if (!mounted) return;
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const CartScreen()),
@@ -327,6 +338,8 @@ class WishlistScreenState extends State<WishlistScreen> {
             )
           : isGuest
               ? buildGuestView(isDark)
+              : errorMessage.isNotEmpty
+                  ? buildErrorView(isDark)
               : wishlist.isEmpty
                   ? buildEmptyView(isDark)
                   : RefreshIndicator(
@@ -564,17 +577,7 @@ class WishlistScreenState extends State<WishlistScreen> {
   // 3. BESPOKE WISHLIST ITEM CARD (Double-Bezel Concentric Architecture)
   // =========================================================================
   Widget buildLuxuryWishlistItem(Map<String, dynamic> item, int index, bool isDark) {
-    final imagesList = (item["allImages"] as List?)?.map((e) => e.toString()).toList() ?? [item["image"].toString()];
-
-    final productObj = Product(
-      id: item["productId"].toString(),
-      name: item["name"].toString(),
-      category: item["category"].toString(),
-      description: item["description"]?.toString() ?? "",
-      price: (item["price"] as num?)?.toDouble() ?? 0.0,
-      rating: (item["rating"] as num?)?.toDouble() ?? 4.8,
-      images: imagesList,
-    );
+    final productObj = item["product"] as Product;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -879,6 +882,41 @@ class WishlistScreenState extends State<WishlistScreen> {
                   letterSpacing: 1.2,
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildErrorView(bool isDark) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 54, color: Colors.redAccent),
+            const SizedBox(height: 16),
+            Text(
+              "Unable to Load Wishlist",
+              style: AppFonts.cinzel(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              errorMessage,
+              textAlign: TextAlign.center,
+              style: AppFonts.poppins(fontSize: 12.5, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: loadWishlist,
+              child: const Text("RETRY CONNECTION"),
             ),
           ],
         ),

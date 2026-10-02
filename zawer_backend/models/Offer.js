@@ -28,6 +28,13 @@ const offerSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+      // Runs on save/create only, so reading existing docs never fails
+      validate: {
+        validator: function (v) {
+          return this.discountType !== "percentage" || v <= 100;
+        },
+        message: "Percentage discount cannot exceed 100",
+      },
     },
     maxDiscount: {
       type: Number,
@@ -53,6 +60,10 @@ const offerSchema = new mongoose.Schema(
     usageLimit: {
       type: Number,
       default: 1000,
+    },
+    perUserLimit: {
+      type: Number,
+      default: 0, // 0 means unlimited uses per user
     },
     usedCount: {
       type: Number,
@@ -87,8 +98,9 @@ const offerSchema = new mongoose.Schema(
 );
 
 // Virtual helper for expiration check
+// Missing expiryDate = no expiry
 offerSchema.methods.isExpired = function () {
-  return new Date() > this.expiryDate;
+  return this.expiryDate instanceof Date && new Date() > this.expiryDate;
 };
 
 // Calculate exact discount for a given amount
@@ -104,10 +116,11 @@ offerSchema.methods.calculateDiscount = function (orderAmount) {
       discount = this.maxDiscount;
     }
   } else if (this.discountType === "flat") {
-    discount = Math.min(this.discountValue, orderAmount);
+    discount = this.discountValue;
   }
 
-  return Math.round(discount);
+  // Never more than the order (covers legacy percentage docs above 100)
+  return Math.min(Math.round(Math.max(0, discount)), Math.max(0, orderAmount));
 };
 
 module.exports = mongoose.model("Offer", offerSchema);

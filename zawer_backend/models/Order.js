@@ -107,6 +107,11 @@ const orderSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Offer whose usedCount this order reserved; released by id on cancel (absent on old orders)
+    couponOfferId: {
+      type: mongoose.Schema.Types.ObjectId,
+    },
+
     totalAmount: {
       type: Number,
       required: true,
@@ -130,8 +135,10 @@ const orderSchema = new mongoose.Schema(
 
     trackingNumber: {
       type: String,
+      // New orders only: Mongoose also applies defaults when loading old orders that lack the
+      // field, which would show a different random number on every read.
       default: function () {
-        return "ZWR-" + Math.floor(100000 + Math.random() * 900000);
+        return this.isNew ? "ZWR-" + Math.floor(100000 + Math.random() * 900000) : undefined;
       },
     },
 
@@ -147,8 +154,9 @@ const orderSchema = new mongoose.Schema(
 
     estimatedDelivery: {
       type: Date,
+      // Only for new orders; otherwise old orders get a fresh date on every read
       default: function () {
-        return new Date(Date.now() + 4 * 24 * 60 * 60 * 1000);
+        return this.isNew ? new Date(Date.now() + 4 * 24 * 60 * 60 * 1000) : undefined;
       },
     },
 
@@ -162,14 +170,28 @@ const orderSchema = new mongoose.Schema(
       type: [timelineStepSchema],
       default: [],
     },
+
+    // Client-generated key so a retried checkout returns the same order
+    idempotencyKey: {
+      type: String,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-orderSchema.index({ trackingNumber: 1 }, { unique: true });
+// Partial: only real tracking numbers are unique, so legacy orders without one can coexist.
+// An existing non-partial trackingNumber_1 index must be replaced: run node seed/fix-tracking-index.js
+orderSchema.index(
+  { trackingNumber: 1 },
+  { unique: true, partialFilterExpression: { trackingNumber: { $type: "string", $gt: "" } } }
+);
 orderSchema.index({ userId: 1 });
+orderSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
+);
 
 orderSchema.pre("validate", function () {
   if (this.subtotal == null) {

@@ -64,6 +64,7 @@ const seedOffers = [
     startDate: new Date(),
     expiryDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days
     usageLimit: 1000,
+    perUserLimit: 1,
     usedCount: 42,
     isActive: true,
     tag: "WELCOME PRIVILEGE",

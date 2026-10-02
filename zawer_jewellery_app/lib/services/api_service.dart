@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -19,7 +19,18 @@ class ApiService {
   static Future<Map<String, dynamic>> _handleResponse(
     http.Response response,
   ) async {
-    final dynamic decoded = jsonDecode(response.body);
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } on FormatException {
+      // Proxy error pages (502/504 HTML) or empty bodies: the server was
+      // reached, so don't report it as a connection failure.
+      return {
+        "statusCode": response.statusCode,
+        "success": false,
+        "message": "Server error (${response.statusCode}). Please try again.",
+      };
+    }
 
     if (decoded is Map<String, dynamic>) {
       return {
@@ -35,20 +46,65 @@ class ApiService {
     };
   }
 
+  static const String _timeoutMessage =
+      "The server took too long to respond. Please try again.";
+
+  // Only idempotent methods are safe to resend automatically. Most PUTs and
+  // DELETEs here set an absolute value, but not all of them: order status
+  // updates are state transitions, so callers pass `retry: false` for those.
+  // POSTs (orders, cart adds, auth) must never be replayed.
+  static int maxAttempts(String method, {bool retry = true}) =>
+      retry && const {"GET", "PUT", "DELETE"}.contains(method) ? 3 : 1;
+
   static Future<http.Response> _send(
-    Future<http.Response> Function() request,
-  ) async {
-    for (int attempt = 0; attempt < 3; attempt++) {
+    String method,
+    Future<http.Response> Function() request, {
+    bool retry = true,
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final int attempts = maxAttempts(method, retry: retry);
+    for (int attempt = 0; attempt < attempts; attempt++) {
       try {
-        return await request();
+        final response = await request().timeout(timeout);
+        // Expired / revoked session: drop local auth, but only if the request
+        // carried the token that is still stored. A stale 401 from before a
+        // fresh login (or a guest's empty "Bearer ") must not wipe the session.
+        if (response.statusCode == 401) {
+          final String sent = (response.request?.headers["Authorization"] ?? "")
+              .replaceFirst("Bearer", "")
+              .trim();
+          if (sent.isNotEmpty && sent == await getToken()) {
+            await clearAuth();
+          }
+        }
+        return response;
       } catch (_) {
-        if (attempt == 2) rethrow;
+        if (attempt == attempts - 1) rethrow;
         await Future.delayed(
           Duration(milliseconds: 700 * (attempt + 1)),
         );
       }
     }
     throw Exception("Request failed");
+  }
+
+  // =========================================================
+  // CLEAR SAVED AUTH (logout / 401)
+  // =========================================================
+
+  static Future<void> clearAuth() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    for (final key in const [
+      "token",
+      "userId",
+      "userName",
+      "userEmail",
+      "userPhone",
+      "userRole",
+      "savedAddress",
+    ]) {
+      await prefs.remove(key);
+    }
   }
 
   // =========================================================
@@ -61,10 +117,17 @@ class ApiService {
   // - Else (iOS, macOS, Linux, Windows): http://localhost:5000
   // Overridable via --dart-define=API_BASE_URL=...
   //
+  static const String _envUrl = String.fromEnvironment("API_BASE_URL");
+
+  // Release builds block cleartext HTTP, so the dev fallbacks below can't work
+  // there. main.dart shows this message instead of the app when non-null.
+  static String? get configError => kReleaseMode && _envUrl.isEmpty
+      ? "Release builds need --dart-define=API_BASE_URL=https://your-server"
+      : null;
+
   static String get baseUrl {
-    const envUrl = String.fromEnvironment("API_BASE_URL");
-    if (envUrl.isNotEmpty) {
-      return envUrl;
+    if (_envUrl.isNotEmpty) {
+      return _envUrl;
     }
     if (kIsWeb) {
       return "http://localhost:5000";
@@ -97,7 +160,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/auth/register");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
@@ -113,7 +176,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -130,7 +193,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/auth/login");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"email": email, "password": password}),
@@ -141,7 +204,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -151,17 +214,20 @@ class ApiService {
   // GET ALL PRODUCTS
   // =========================================================
 
-  static Future<Map<String, dynamic>> getProducts() async {
-    final Uri url = Uri.parse("$baseUrl/api/products");
+  static Future<Map<String, dynamic>> getProducts({int? page, int? limit}) async {
+    final Uri url = Uri.parse("$baseUrl/api/products").replace(queryParameters: {
+      if (page != null) "page": "$page",
+      if (limit != null) "limit": "$limit",
+    });
 
     try {
-      final response = await _send(() => http.get(url));
+      final response = await _send("GET", () => http.get(url));
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -172,37 +238,16 @@ class ApiService {
   // =========================================================
 
   static Future<Map<String, dynamic>> getProductById(String id) async {
-    final Uri url = Uri.parse("$baseUrl/api/products/$id");
+    final Uri url = Uri.parse("$baseUrl/api/products/${Uri.encodeComponent(id)}");
 
     try {
-      final response = await _send(() => http.get(url));
+      final response = await _send("GET", () => http.get(url));
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
-  // SEARCH PRODUCTS
-  // =========================================================
-
-  static Future<Map<String, dynamic>> searchProducts(String search) async {
-    final String encodedSearch = Uri.encodeComponent(search);
-    final Uri url = Uri.parse("$baseUrl/api/products/search?search=$encodedSearch");
-
-    try {
-      final response = await _send(() => http.get(url));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -220,7 +265,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/cart");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -233,7 +278,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -248,7 +293,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/cart");
 
     try {
-      final response = await _send(() => http.get(
+      final response = await _send("GET", () => http.get(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -257,7 +302,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -272,10 +317,10 @@ class ApiService {
     required int quantity,
   }) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/cart/$productId");
+    final Uri url = Uri.parse("$baseUrl/api/cart/${Uri.encodeComponent(productId)}");
 
     try {
-      final response = await _send(() => http.put(
+      final response = await _send("PUT", () => http.put(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -288,7 +333,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -300,10 +345,10 @@ class ApiService {
 
   static Future<Map<String, dynamic>> removeFromCart(String productId) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/cart/$productId");
+    final Uri url = Uri.parse("$baseUrl/api/cart/${Uri.encodeComponent(productId)}");
 
     try {
-      final response = await _send(() => http.delete(
+      final response = await _send("DELETE", () => http.delete(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -312,7 +357,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -327,7 +372,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/cart");
 
     try {
-      final response = await _send(() => http.delete(
+      final response = await _send("DELETE", () => http.delete(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -336,7 +381,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -351,7 +396,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/wishlist");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -364,7 +409,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -379,7 +424,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/wishlist");
 
     try {
-      final response = await _send(() => http.get(
+      final response = await _send("GET", () => http.get(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -388,7 +433,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -400,10 +445,10 @@ class ApiService {
 
   static Future<Map<String, dynamic>> removeFromWishlist(String productId) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/wishlist/$productId");
+    final Uri url = Uri.parse("$baseUrl/api/wishlist/${Uri.encodeComponent(productId)}");
 
     try {
-      final response = await _send(() => http.delete(
+      final response = await _send("DELETE", () => http.delete(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -412,7 +457,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -426,7 +471,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/auth/forgot-password");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"email": email}),
@@ -436,7 +481,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -454,7 +499,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/auth/reset-password");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
@@ -468,7 +513,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -478,21 +523,24 @@ class ApiService {
   // GET PROFILE
   // =========================================================
 
-  static Future<Map<String, dynamic>> getProfile() async {
+  // `quick`: one attempt with a short timeout (startup session check).
+  static Future<Map<String, dynamic>> getProfile({bool quick = false}) async {
     final String token = await getToken();
     final Uri url = Uri.parse("$baseUrl/api/auth/profile");
 
     try {
-      final response = await _send(() => http.get(
-        url,
-        headers: {"Authorization": "Bearer $token"},
-      ));
+      final response = await _send(
+        "GET",
+        () => http.get(url, headers: {"Authorization": "Bearer $token"}),
+        retry: !quick,
+        timeout: Duration(seconds: quick ? 6 : 20),
+      );
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -510,7 +558,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/auth/profile");
 
     try {
-      final response = await _send(() => http.put(
+      final response = await _send("PUT", () => http.put(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -523,7 +571,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -541,12 +589,14 @@ class ApiService {
     required List<Map<String, dynamic>> items,
     String? couponCode,
     double? discountAmount,
+    String? idempotencyKey,
+    bool fromCart = true,
   }) async {
     final String token = await getToken();
     final Uri url = Uri.parse("$baseUrl/api/orders");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -560,6 +610,8 @@ class ApiService {
           "items": items,
           if (couponCode != null && couponCode.isNotEmpty) "couponCode": couponCode,
           if (discountAmount != null && discountAmount > 0) "discountAmount": discountAmount,
+          "idempotencyKey": ?idempotencyKey,
+          "fromCart": fromCart,
         }),
       ));
       return await _handleResponse(response);
@@ -567,7 +619,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -578,16 +630,16 @@ class ApiService {
   // =========================================================
 
   static Future<Map<String, dynamic>> getProductReviews(String productId) async {
-    final Uri url = Uri.parse("$baseUrl/api/products/$productId/reviews");
+    final Uri url = Uri.parse("$baseUrl/api/products/${Uri.encodeComponent(productId)}/reviews");
 
     try {
-      final response = await _send(() => http.get(url));
+      final response = await _send("GET", () => http.get(url));
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -603,10 +655,10 @@ class ApiService {
     required String comment,
   }) async {
     final String token = await getToken();
-    final Uri url = Uri.parse("$baseUrl/api/products/$productId/reviews");
+    final Uri url = Uri.parse("$baseUrl/api/products/${Uri.encodeComponent(productId)}/reviews");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
         headers: {
           "Content-Type": "application/json",
@@ -619,7 +671,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -634,7 +686,7 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/orders");
 
     try {
-      final response = await _send(() => http.get(
+      final response = await _send("GET", () => http.get(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -643,7 +695,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to connect to server",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to connect to server",
         "error": error.toString(),
       };
     }
@@ -660,7 +712,7 @@ class ApiService {
     );
 
     try {
-      final response = await _send(() => http.get(
+      final response = await _send("GET", () => http.get(
         url,
         headers: {"Authorization": "Bearer $token"},
       ));
@@ -669,59 +721,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to fetch order tracking",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
-  // TRACK ORDER BY TRACKING NUMBER OR ID
-  // =========================================================
-
-  static Future<Map<String, dynamic>> trackOrderByNumber(String query) async {
-    final String token = await getToken();
-    final Uri url = Uri.parse(
-      "$baseUrl/api/orders/track/${Uri.encodeComponent(query.trim())}",
-    );
-
-    try {
-      final response = await _send(() => http.get(
-        url,
-        headers: {"Authorization": "Bearer $token"},
-      ));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": "Unable to track order",
-        "error": error.toString(),
-      };
-    }
-  }
-
-  // =========================================================
-  // GET ORDER BY ID
-  // =========================================================
-
-  static Future<Map<String, dynamic>> getOrderById(String orderId) async {
-    final String token = await getToken();
-    final Uri url = Uri.parse(
-      "$baseUrl/api/orders/${Uri.encodeComponent(orderId.trim())}",
-    );
-
-    try {
-      final response = await _send(() => http.get(
-        url,
-        headers: {"Authorization": "Bearer $token"},
-      ));
-      return await _handleResponse(response);
-    } catch (error) {
-      return {
-        "statusCode": 0,
-        "success": false,
-        "message": "Unable to fetch order details",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to fetch order tracking",
         "error": error.toString(),
       };
     }
@@ -741,20 +741,20 @@ class ApiService {
     );
 
     try {
-      final response = await _send(() => http.put(
+      final response = await _send("PUT", () => http.put(
         url,
         headers: {
           "Content-Type": "application/json",
           "Authorization": "Bearer $token",
         },
         body: jsonEncode({"status": status}),
-      ));
+      ), retry: false);
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to update order status",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to update order status",
         "error": error.toString(),
       };
     }
@@ -769,13 +769,13 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/offers");
 
     try {
-      final response = await _send(() => http.get(url));
+      final response = await _send("GET", () => http.get(url));
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to fetch promotional offers",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to fetch promotional offers",
         "error": error.toString(),
       };
     }
@@ -786,13 +786,13 @@ class ApiService {
     final Uri url = Uri.parse("$baseUrl/api/offers/discounted-products");
 
     try {
-      final response = await _send(() => http.get(url));
+      final response = await _send("GET", () => http.get(url));
       return await _handleResponse(response);
     } catch (error) {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to fetch discounted products",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to fetch discounted products",
         "error": error.toString(),
       };
     }
@@ -803,17 +803,23 @@ class ApiService {
     required String code,
     required double subtotal,
     String? category,
+    List<Map<String, dynamic>>? items,
   }) async {
+    final String token = await getToken();
     final Uri url = Uri.parse("$baseUrl/api/offers/validate-coupon");
 
     try {
-      final response = await _send(() => http.post(
+      final response = await _send("POST", () => http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "Content-Type": "application/json",
+          if (token.isNotEmpty) "Authorization": "Bearer $token",
+        },
         body: jsonEncode({
           "couponCode": code.trim().toUpperCase(),
           "subtotal": subtotal,
           if (category != null && category.isNotEmpty) "category": category,
+          "items": ?items,
         }),
       ));
       return await _handleResponse(response);
@@ -821,7 +827,7 @@ class ApiService {
       return {
         "statusCode": 0,
         "success": false,
-        "message": "Unable to validate coupon code",
+        "message": error is TimeoutException ? _timeoutMessage : "Unable to validate coupon code",
         "error": error.toString(),
       };
     }

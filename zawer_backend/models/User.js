@@ -27,12 +27,33 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user",
+    },
+
+    passwordChangedAt: {
+      type: Date,
+      default: null,
+    },
+
     otpCode: {
       type: String,
       default: "",
     },
 
     otpExpiry: {
+      type: Date,
+      default: null,
+    },
+
+    otpAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    otpIssuedAt: {
       type: Date,
       default: null,
     },
